@@ -1,0 +1,17 @@
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.next/
+out/
+build/
+dist/
+*.egg-info/
+**/*.egg-info/
+.git/
+apps/mobile/
+apps/web/
+packages/shared/
