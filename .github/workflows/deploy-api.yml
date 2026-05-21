@@ -21,7 +21,7 @@ jobs:
       - name: Deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --service preprank-api
+        run: railway up --service preprank --project 9e251693-02ab-48ef-84b4-0336d37ea2df
 
       # Alternative: Fly.io deployment
       # - uses: superfly/flyctl-actions/setup-flyctl@master
