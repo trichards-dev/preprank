@@ -160,3 +160,4 @@ def recalculate_ratings(
     db.commit()
 
     return {"status": "ok", "teams_updated": updated, "games_processed": len(games)}
+
