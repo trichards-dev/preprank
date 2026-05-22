@@ -1,0 +1,672 @@
+#!/usr/bin/env python3
+"""Ingest LHSAA game history for 7 non-football sports (2021-2025).
+
+Scrapes lhsaaonline.org schedule/results pages for:
+  Volleyball, Boys Basketball, Girls Basketball, Baseball, Softball,
+  Boys Soccer, Girls Soccer
+
+Usage:
+    python scripts/ingest_sports_historical.py --dry-run
+    python scripts/ingest_sports_historical.py --sports volleyball
+    python scripts/ingest_sports_historical.py --sports all
+    python scripts/ingest_sports_historical.py --seasons 2024 2025
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from difflib import SequenceMatcher
+
+import httpx
+from bs4 import BeautifulSoup
+
+# ---------------------------------------------------------------------------
+# Supabase config
+# ---------------------------------------------------------------------------
+
+import os
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://ywlaekkxkwfznwuupggi.supabase.co")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+# ---------------------------------------------------------------------------
+# Sport configs
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SportConfig:
+    name: str
+    sport_id: int
+    base_url: str
+    form_path: str
+    report_suffix: str  # e.g. "?p=1" or "?p=1&bb=1"
+    year_field: str     # "y" or "yr"
+    filter_field: str   # "d"
+    filter_values: list[str]  # classes or divisions to query
+    years: list[int]
+    score_type: str     # "sets", "points", "runs", "goals"
+    week_snapshot: int  # week_number to label the rating snapshot
+
+    @property
+    def form_url(self) -> str:
+        return self.base_url + self.form_path
+
+    @property
+    def report_url(self) -> str:
+        return self.base_url + "ReportSchedule.asp" + self.report_suffix
+
+    @property
+    def division_filter(self) -> bool:
+        """True if filter_values are divisions (I/II/…), False if classes (5A/4A/…)."""
+        return self.filter_values[0] in ("I", "II", "III", "IV", "V")
+
+
+CLASS_TO_DIV = {"5A": "I", "4A": "II", "3A": "III", "2A": "IV", "1A": "V", "B": "V", "C": "V"}
+
+SPORTS: dict[str, SportConfig] = {
+    "volleyball": SportConfig(
+        name="Volleyball", sport_id=2,
+        base_url="https://www.lhsaaonline.org/pr/vbpr/admin/",
+        form_path="SearchVolleyballSchedule.asp",
+        report_suffix="?p=1",
+        year_field="y", filter_field="d",
+        filter_values=["I", "II", "III", "IV", "V"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="sets", week_snapshot=12,
+    ),
+    "boys_basketball": SportConfig(
+        name="Boys Basketball", sport_id=5,
+        base_url="https://www.lhsaaonline.org/pr/bbpr/admin/",
+        form_path="SearchBoysBasketballSchedule.asp",
+        report_suffix="?p=1&bb=1",
+        year_field="yr", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="points", week_snapshot=20,
+    ),
+    "girls_basketball": SportConfig(
+        name="Girls Basketball", sport_id=6,
+        base_url="https://www.lhsaaonline.org/pr/bbpr/admin/",
+        form_path="SearchGirlsBasketballSchedule.asp",
+        report_suffix="?p=1&bb=2",
+        year_field="yr", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="points", week_snapshot=20,
+    ),
+    "baseball": SportConfig(
+        name="Baseball", sport_id=11,
+        base_url="https://www.lhsaaonline.org/pr/bpr/admin/",
+        form_path="SearchBaseballSchedule.asp",
+        report_suffix="?p=1&bb=1",
+        year_field="y", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="runs", week_snapshot=14,
+    ),
+    "softball": SportConfig(
+        name="Softball", sport_id=12,
+        base_url="https://www.lhsaaonline.org/pr/sbpr/admin/",
+        form_path="SearchSoftballSchedule.asp",
+        report_suffix="?p=1&bb=2",
+        year_field="y", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="runs", week_snapshot=14,
+    ),
+    "boys_soccer": SportConfig(
+        name="Boys Soccer", sport_id=13,
+        base_url="https://www.lhsaaonline.org/pr/sopr/admin/",
+        form_path="SearchboyssoccerSchedule.asp",
+        report_suffix="?p=1&so=1",
+        year_field="yr", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="goals", week_snapshot=15,
+    ),
+    "girls_soccer": SportConfig(
+        name="Girls Soccer", sport_id=14,
+        base_url="https://www.lhsaaonline.org/pr/sopr/admin/",
+        form_path="SearchgirlssoccerSchedule.asp",
+        report_suffix="?p=1&so=2",
+        year_field="yr", filter_field="d",
+        filter_values=["5A", "4A", "3A", "2A", "1A"],
+        years=[2021, 2022, 2023, 2024, 2025],
+        score_type="goals", week_snapshot=15,
+    ),
+}
+
+REQUEST_DELAY = 0.4
+
+
+# ---------------------------------------------------------------------------
+# Name matching
+# ---------------------------------------------------------------------------
+
+def _normalize(name: str) -> str:
+    return name.lower().strip()
+
+
+def match_school(query: str, candidates: dict[str, int], threshold: float = 0.75) -> int | None:
+    q = _normalize(query)
+    for name, sid in candidates.items():
+        if _normalize(name) == q:
+            return sid
+    best_score, best_id = 0.0, None
+    for name, sid in candidates.items():
+        score = SequenceMatcher(None, q, _normalize(name)).ratio()
+        if score > best_score and score >= threshold:
+            best_score = score
+            best_id = sid
+    return best_id
+
+
+# ---------------------------------------------------------------------------
+# HTML scraping
+# ---------------------------------------------------------------------------
+
+# Fixed column indices for data rows. lhsaaonline returns one table per school;
+# each data row always has the same structure regardless of table header format.
+# 12-col schema: volleyball, baseball, softball, soccer
+# 13-col schema: basketball (has OT column between Win/Loss and Score)
+_SCHEMA_12 = {"school": 1, "dist_div": 2, "date": 3, "opponent": 4, "opp_dist_div": 5,
+              "dt_flag": 6, "home_away": 9, "wl": 10, "score": 11}
+_SCHEMA_13 = {"school": 1, "dist_div": 2, "date": 3, "opponent": 4, "opp_dist_div": 5,
+              "dt_flag": 6, "home_away": 9, "wl": 10, "score": 12}
+
+
+def fetch_games(session: httpx.Client, cfg: SportConfig, year: int, fval: str) -> list[dict]:
+    """Fetch all game rows for one sport/year/filter-value combination.
+
+    lhsaaonline renders one table per school on the results page (sometimes two
+    tables per school in different HTML layouts). We collect rows from ALL tables
+    that have 'School' and 'Win/Loss' in the header; the dedup pass handles any
+    rows that appear in multiple tables.
+    """
+    data = {
+        cfg.year_field: str(year),
+        cfg.filter_field: fval,
+        "resultdate": "", "n": "", "h": "", "f": "",
+    }
+    r = session.post(cfg.report_url, data=data,
+                     headers={"Referer": cfg.form_url}, timeout=60)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    results = []
+
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        header = [td.get_text(strip=True) for td in rows[0].find_all(["td", "th"])]
+        # 'Win/Loss' for most sports; 'Win/Loss/Tie' for baseball/softball
+        if "School" not in header or not any("Win/Loss" in h for h in header):
+            continue
+
+        for row in rows[1:]:
+            cols = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
+            if len(cols) == 12:
+                s = _SCHEMA_12
+            elif len(cols) == 13:
+                s = _SCHEMA_13
+            else:
+                continue  # header rows, empty rows, division-label rows
+
+            wl = cols[s["wl"]].strip().upper()
+            if wl not in ("W", "L"):
+                continue  # unplayed or bye
+
+            school = cols[s["school"]].strip()
+            opponent = cols[s["opponent"]].strip()
+            if not school or not opponent:
+                continue
+
+            dt_flag = cols[s["dt_flag"]].strip()
+            results.append({
+                "school": school,
+                "opponent": opponent,
+                "game_date": _parse_date(cols[s["date"]]),
+                "home_away": cols[s["home_away"]].strip().upper(),
+                "wl": wl,
+                "score": cols[s["score"]],
+                "is_district": dt_flag.upper() == "D",
+                "dist_div": cols[s["dist_div"]],
+                "opp_dist_div": cols[s["opp_dist_div"]],
+                "filter_val": fval,
+            })
+
+    return results
+
+
+def _parse_date(raw: str) -> str | None:
+    """Extract YYYY-MM-DD from various date formats used by lhsaaonline."""
+    # Try "MM/DD/YYYY" possibly followed by time/day
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+    if m:
+        try:
+            return datetime(int(m.group(3)), int(m.group(1)), int(m.group(2))).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+    return None
+
+
+def parse_scores(score_str: str, wl: str, is_home: bool, score_type: str) -> tuple[int, int]:
+    """
+    Returns (home_score, away_score) for the games table.
+    For power ratings we only need W/L, but we store actual scores where available.
+    Falls back to 1/0 encoding if parsing fails.
+    """
+    won = wl == "W"
+
+    if score_type == "sets":
+        # Volleyball: "25-22, 16-25, 25-23" — count sets won by each side
+        sets_me = 0
+        sets_opp = 0
+        for s in score_str.split(","):
+            parts = s.strip().split("-")
+            if len(parts) == 2:
+                try:
+                    a, b = int(parts[0]), int(parts[1])
+                    if a > b:
+                        sets_me += 1
+                    else:
+                        sets_opp += 1
+                except ValueError:
+                    pass
+        if sets_me + sets_opp > 0:
+            if is_home:
+                return sets_me, sets_opp
+            else:
+                return sets_opp, sets_me
+
+    elif score_type in ("points", "runs", "goals"):
+        # Single "X-Y" score from my perspective
+        # Strip forfeit marker
+        clean = score_str.replace("(f)", "").replace("(F)", "").strip()
+        # Handle OT markers like "62-45 OT"
+        clean = re.sub(r"\s*(OT|OT\d*)$", "", clean, flags=re.IGNORECASE).strip()
+        parts = clean.split("-")
+        if len(parts) == 2:
+            try:
+                me, opp = int(parts[0]), int(parts[1])
+                if is_home:
+                    return me, opp
+                else:
+                    return opp, me
+            except ValueError:
+                pass
+
+    # Fallback: encode W/L as 1/0
+    if is_home:
+        return (1, 0) if won else (0, 1)
+    else:
+        return (0, 1) if won else (1, 0)
+
+
+def deduplicate(rows: list[dict]) -> list[dict]:
+    """
+    Deduplicate games — lhsaaonline returns one row per school per game.
+    Key: (sorted pair of names, date). Prefer Home perspective.
+    """
+    seen: dict[tuple, dict] = {}
+    for row in rows:
+        key = (min(row["school"], row["opponent"]),
+               max(row["school"], row["opponent"]),
+               row["game_date"] or "")
+        if key not in seen:
+            seen[key] = row
+        elif row["home_away"] == "H":
+            seen[key] = row
+    return list(seen.values())
+
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+def load_schools(sb) -> dict[str, int]:
+    res = sb.table("schools").select("id,name").execute()
+    return {r["name"]: r["id"] for r in res.data}
+
+
+def load_teams_for_sport(sb, sport_id: int) -> dict[tuple[int, int], int]:
+    """(school_id, season_year) -> team_id"""
+    all_teams = []
+    offset, page = 0, 1000
+    while True:
+        res = sb.table("teams").select("id,school_id,season_year") \
+                .eq("sport_id", sport_id).range(offset, offset + page - 1).execute()
+        if not res.data:
+            break
+        all_teams.extend(res.data)
+        if len(res.data) < page:
+            break
+        offset += page
+    return {(r["school_id"], r["season_year"]): r["id"] for r in all_teams}
+
+
+def get_or_create_team(sb, school_id: int, sport_id: int, season_year: int,
+                        division: str, select_status: str,
+                        team_cache: dict, dry_run: bool) -> int | None:
+    key = (school_id, season_year)
+    if key in team_cache:
+        return team_cache[key]
+
+    if dry_run:
+        return None  # Silently skip in dry-run
+
+    res = sb.table("teams").insert({
+        "school_id": school_id, "sport_id": sport_id,
+        "season_year": season_year, "division": division,
+        "select_status": select_status,
+    }).execute()
+    if res.data:
+        tid = res.data[0]["id"]
+        team_cache[key] = tid
+        return tid
+    return None
+
+
+def extract_division(dist_div: str, cfg: SportConfig) -> str:
+    """Extract division from 'District-Division' or 'District-Class' strings."""
+    if not dist_div:
+        return "I"
+    part = dist_div.split("-")[-1].strip()
+    if cfg.division_filter:
+        return part if part in ("I", "II", "III", "IV", "V") else "I"
+    else:
+        return CLASS_TO_DIV.get(part, "I")
+
+
+# ---------------------------------------------------------------------------
+# Power rating calculation
+# ---------------------------------------------------------------------------
+
+def calculate_and_store_ratings(sb, cfg: SportConfig, season_year: int,
+                                 team_cache: dict, dry_run: bool):
+    from engine.power_rating import calculate_all_ratings
+    from engine.types import TeamRecord, GameResult, GameStatus
+
+    print(f"\n  Calculating power ratings for {season_year} {cfg.name}...")
+
+    all_games = []
+    offset, page = 0, 1000
+    while True:
+        res = sb.table("games").select(
+            "id,home_team_id,away_team_id,home_score,away_score,week_number,status,is_out_of_state"
+        ).eq("sport_id", cfg.sport_id).eq("season_year", season_year).range(offset, offset + page - 1).execute()
+        if not res.data:
+            break
+        all_games.extend(res.data)
+        if len(res.data) < page:
+            break
+        offset += page
+
+    if not all_games:
+        print("  No games found — skipping.")
+        return
+
+    print(f"  Loaded {len(all_games)} games from DB.")
+
+    all_team_ids = {g["home_team_id"] for g in all_games} | {g["away_team_id"] for g in all_games}
+    teams_res = sb.table("teams").select("id,school_id,division,select_status") \
+                  .in_("id", list(all_team_ids)).execute()
+    team_info = {r["id"]: r for r in teams_res.data}
+
+    school_ids = list({r["school_id"] for r in teams_res.data})
+    schools_res = sb.table("schools").select("id,name,classification") \
+                    .in_("id", school_ids).execute()
+    school_info = {r["id"]: r for r in schools_res.data}
+
+    team_records: dict[int, TeamRecord] = {}
+    for tid, ti in team_info.items():
+        sid = ti["school_id"]
+        sch = school_info.get(sid, {})
+        div = ti.get("division") or CLASS_TO_DIV.get(sch.get("classification", "5A"), "I")
+        team_records[tid] = TeamRecord(
+            team_id=tid,
+            school_name=sch.get("name", f"sid:{sid}"),
+            division=div,
+            classification=sch.get("classification", "5A"),
+            wins=0, losses=0,
+        )
+
+    game_results: list[GameResult] = []
+    for g in all_games:
+        if g.get("is_out_of_state"):
+            continue
+        if g["home_score"] is None or g["away_score"] is None:
+            continue
+        status = GameStatus.FINAL if g["status"] == "final" else GameStatus.SCHEDULED
+        game_results.append(GameResult(
+            game_id=g["id"],
+            home_team_id=g["home_team_id"],
+            away_team_id=g["away_team_id"],
+            home_score=g["home_score"],
+            away_score=g["away_score"],
+            status=status,
+            week_number=g.get("week_number"),
+        ))
+
+    if not game_results:
+        print("  No valid game results — skipping.")
+        return
+
+    print(f"  Running engine on {len(game_results)} games, {len(team_records)} teams...")
+    updated = calculate_all_ratings(team_records, game_results)
+
+    from collections import defaultdict
+    brackets: dict[str, list] = defaultdict(list)
+    for tid, rec in updated.items():
+        brackets[rec.division].append((rec.power_rating, tid))
+
+    ranks: dict[int, tuple[int, int]] = {}
+    for bracket, entries in brackets.items():
+        entries.sort(reverse=True)
+        total = len(entries)
+        for rank, (_, tid) in enumerate(entries, start=1):
+            ranks[tid] = (rank, total)
+
+    payload = []
+    for tid, rec in updated.items():
+        rank, total = ranks.get(tid, (0, 0))
+        payload.append({
+            "team_id": tid,
+            "week_number": cfg.week_snapshot,
+            "season_year": season_year,
+            "power_rating": round(float(rec.power_rating), 2),
+            "strength_factor": round(float(rec.strength_factor), 2),
+            "rank_in_division": rank,
+            "total_teams_in_division": total,
+        })
+
+    if dry_run:
+        print(f"  [dry-run] Would upsert {len(payload)} power rating rows.")
+        for r in sorted(payload, key=lambda x: x["power_rating"], reverse=True)[:3]:
+            print(f"    team_id={r['team_id']} rating={r['power_rating']} "
+                  f"rank={r['rank_in_division']}/{r['total_teams_in_division']}")
+        return
+
+    print(f"  Upserting {len(payload)} power rating rows...")
+    for i in range(0, len(payload), 200):
+        sb.table("power_ratings").upsert(
+            payload[i:i+200], on_conflict="team_id,week_number,season_year"
+        ).execute()
+    top = sorted(payload, key=lambda x: x["power_rating"], reverse=True)[:3]
+    print(f"  Done. Top 3: {[(r['team_id'], r['power_rating']) for r in top]}")
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+
+def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
+              school_name_to_id: dict, skip_ratings: bool):
+    print(f"\n{'='*60}")
+    print(f"Sport: {cfg.name} (sport_id={cfg.sport_id})")
+    print(f"{'='*60}")
+
+    team_cache = load_teams_for_sport(sb, cfg.sport_id)
+    print(f"  Existing team records: {len(team_cache)}")
+
+    unmatched: set[str] = set()
+    total_inserted = 0
+
+    with httpx.Client(follow_redirects=True, timeout=60) as session:
+        # Warm up session
+        session.get(cfg.form_url)
+
+        for season_year in seasons:
+            if season_year not in cfg.years:
+                print(f"  Season {season_year} not available for {cfg.name}, skipping.")
+                continue
+
+            print(f"\n  Season: {season_year}")
+            all_rows: list[dict] = []
+
+            for fval in cfg.filter_values:
+                try:
+                    rows = fetch_games(session, cfg, season_year, fval)
+                    all_rows.extend(rows)
+                    print(f"    {fval}: {len(rows)} rows", end="  ", flush=True)
+                except Exception as e:
+                    print(f"    {fval}: ERROR {e}", end="  ", flush=True)
+                time.sleep(REQUEST_DELAY)
+            print()
+
+            unique_rows = deduplicate(all_rows)
+            print(f"  Unique games after dedup: {len(unique_rows)}")
+
+            games_to_insert: list[dict] = []
+            for row in unique_rows:
+                school_name = row["school"]
+                opp_name = row["opponent"]
+
+                # Skip open dates / byes
+                if not school_name or not opp_name:
+                    continue
+                if "OPEN DATE" in school_name.upper() or "OPEN DATE" in opp_name.upper():
+                    continue
+
+                school_id = match_school(school_name, school_name_to_id)
+                opp_id = match_school(opp_name, school_name_to_id)
+
+                if school_id is None:
+                    unmatched.add(school_name)
+                    continue
+                if opp_id is None:
+                    unmatched.add(opp_name)
+                    continue
+
+                is_home = row["home_away"] == "H"
+                if is_home:
+                    home_school_id, away_school_id = school_id, opp_id
+                    home_div = extract_division(row["dist_div"], cfg)
+                    away_div = extract_division(row["opp_dist_div"], cfg)
+                else:
+                    home_school_id, away_school_id = opp_id, school_id
+                    home_div = extract_division(row["opp_dist_div"], cfg)
+                    away_div = extract_division(row["dist_div"], cfg)
+
+                home_team_id = get_or_create_team(
+                    sb, home_school_id, cfg.sport_id, season_year,
+                    home_div, "Non-Select", team_cache, dry_run)
+                away_team_id = get_or_create_team(
+                    sb, away_school_id, cfg.sport_id, season_year,
+                    away_div, "Non-Select", team_cache, dry_run)
+
+                if home_team_id is None or away_team_id is None:
+                    continue
+
+                home_score, away_score = parse_scores(
+                    row["score"], row["wl"], is_home, cfg.score_type)
+
+                games_to_insert.append({
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id,
+                    "sport_id": cfg.sport_id,
+                    "season_year": season_year,
+                    "game_date": row["game_date"],
+                    "week_number": None,
+                    "home_score": home_score,
+                    "away_score": away_score,
+                    "status": "final",
+                    "is_district": row["is_district"],
+                    "is_playoff": False,
+                    "is_championship": False,
+                    "is_out_of_state": False,
+                    "source": "lhsaaonline",
+                })
+
+            print(f"  Games ready: {len(games_to_insert)}")
+
+            if dry_run:
+                print(f"  [dry-run] Would insert {len(games_to_insert)} games.")
+                if games_to_insert:
+                    print(f"  Sample: {games_to_insert[0]}")
+            else:
+                print(f"  Inserting in batches...")
+                for i in range(0, len(games_to_insert), 200):
+                    chunk = games_to_insert[i:i+200]
+                    sb.table("games").insert(chunk).execute()
+                total_inserted += len(games_to_insert)
+                print(f"  Season {season_year}: {len(games_to_insert)} games inserted.")
+
+            if not skip_ratings:
+                calculate_and_store_ratings(sb, cfg, season_year, team_cache, dry_run)
+
+    print(f"\n{cfg.name} total games inserted: {total_inserted}")
+    if unmatched:
+        print(f"Unmatched schools ({len(unmatched)}):")
+        for name in sorted(unmatched)[:20]:
+            print(f"  - {name!r}")
+        if len(unmatched) > 20:
+            print(f"  ... and {len(unmatched) - 20} more")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Ingest LHSAA non-football sports history")
+    parser.add_argument("--sports", nargs="+", default=["all"],
+                        choices=list(SPORTS.keys()) + ["all"],
+                        help="Sports to ingest (default: all)")
+    parser.add_argument("--seasons", nargs="+", type=int,
+                        default=[2021, 2022, 2023, 2024, 2025],
+                        help="Season years")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-ratings", action="store_true")
+    args = parser.parse_args()
+
+    sports_to_run = list(SPORTS.keys()) if "all" in args.sports else args.sports
+
+    print(f"{'='*60}")
+    print(f"PrepRank Multi-Sport History Ingest")
+    print(f"Sports: {sports_to_run}")
+    print(f"Seasons: {args.seasons}")
+    print(f"Mode: {'DRY RUN' if args.dry_run else 'LIVE'}")
+    print(f"{'='*60}")
+
+    from supabase import create_client
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY env var not set — get it from Supabase Dashboard → Project Settings → API")
+    sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+    school_name_to_id = {r["name"]: r["id"]
+                         for r in sb.table("schools").select("id,name").execute().data}
+    print(f"Loaded {len(school_name_to_id)} schools from DB.")
+
+    for key in sports_to_run:
+        cfg = SPORTS[key]
+        run_sport(sb, cfg, args.seasons, args.dry_run, school_name_to_id, args.skip_ratings)
+
+    print(f"\n{'='*60}")
+    print("ALL DONE")
+    print(f"{'='*60}")
+
+
+if __name__ == "__main__":
+    main()
