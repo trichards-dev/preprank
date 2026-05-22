@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.engine.power_rating import TeamRecord, GameResult
+from engine.types import TeamRecord, GameResult
 
 
 SEED_CSV = Path(__file__).parent.parent / "data" / "seed" / "2025_football_power_ratings_final.csv"

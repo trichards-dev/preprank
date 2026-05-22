@@ -20,7 +20,7 @@ import csv
 import sys
 from pathlib import Path
 
-from app.engine.power_rating import calculate_all_power_ratings
+from engine.power_rating import calculate_all_ratings
 from scripts.ingest_game_results import ingest, SEED_CSV
 
 
@@ -58,7 +58,7 @@ def validate(csv_path: Path):
         print()
 
     # Run the engine
-    results = calculate_all_power_ratings(data.records, data.games)
+    results = calculate_all_ratings(data.records, list(data.games.values()) if isinstance(data.games, dict) else data.games)
 
     # Compare against published ratings for teams that appear in both
     THRESHOLD = 0.05

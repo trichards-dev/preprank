@@ -32,6 +32,11 @@ class School(Base):
     select_status = Column(String(20))
     enrollment = Column(Integer)
     lhsaa_member_id = Column(String(50))
+    mascot = Column(String(100))
+    mascot_url = Column(String(500))
+    color1 = Column(String(10))
+    color2 = Column(String(10))
+    maxpreps_uuid = Column(String(50), unique=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
