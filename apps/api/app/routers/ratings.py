@@ -26,7 +26,7 @@ def list_rankings(
         .join(School, Team.school_id == School.id)
         .join(Sport, Team.sport_id == Sport.id)
         .filter(
-            Sport.name == sport,
+            Sport.name.ilike(sport),
             PowerRating.season_year == season_year,
             PowerRating.week_number == week_number,
         )
