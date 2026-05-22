@@ -1,31 +1,26 @@
 name: Deploy API
 
-on:
-  push:
-    branches: [master]
-    paths:
-      - 'apps/api/**'
-      - 'packages/engine/**'
-      - 'Dockerfile.api'
-  workflow_dispatch:
-
-jobs:
-  deploy:
-    name: Deploy to Railway
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --service preprank --project 9e251693-02ab-48ef-84b4-0336d37ea2df --environment production
-
-      # Alternative: Fly.io deployment
-      # - uses: superfly/flyctl-actions/setup-flyctl@master
-      # - run: flyctl deploy --config fly.toml --dockerfile Dockerfile.api
-      #   env:
-      #     FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+# Railway handles API deploys natively via its GitHub integration.
+# It watches apps/api, packages/engine, and Dockerfile.api and auto-deploys
+# to production on push to master. No workflow needed here.
+#
+# This file is kept as a placeholder. If Railway integration ever breaks,
+# the Fly.io fallback below can be re-enabled:
+#
+# on:
+#   push:
+#     branches: [master]
+#     paths:
+#       - 'apps/api/**'
+#       - 'packages/engine/**'
+#       - 'Dockerfile.api'
+#
+# jobs:
+#   deploy:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: superfly/flyctl-actions/setup-flyctl@master
+#       - run: flyctl deploy --config fly.toml --dockerfile Dockerfile.api
+#         env:
+#           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
