@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     CORS_ORIGINS: str = "http://localhost:3001,http://localhost:3000"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

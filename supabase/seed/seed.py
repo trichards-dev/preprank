@@ -181,9 +181,14 @@ def seed_power_ratings(cur, rows, team_map):
         total_in_div = division_counts[division]
 
         cur.execute(
-            """INSERT INTO power_ratings (team_id, week_number, season_year, power_rating, strength_factor, rank_in_division, total_teams_in_division)
-               VALUES (%s, 11, 2025, %s, %s, %s, %s)
-               ON CONFLICT (team_id, week_number, season_year) DO NOTHING""",
+            """INSERT INTO power_ratings (team_id, week_number, season_year, power_rating, strength_factor, rank_in_division, total_teams_in_division, source)
+               VALUES (%s, 11, 2025, %s, %s, %s, %s, 'engine')
+               ON CONFLICT (team_id, week_number, season_year) WHERE source = 'engine'
+               DO UPDATE SET
+                 power_rating = EXCLUDED.power_rating,
+                 strength_factor = EXCLUDED.strength_factor,
+                 rank_in_division = EXCLUDED.rank_in_division,
+                 total_teams_in_division = EXCLUDED.total_teams_in_division""",
             (team_id, power_rating, strength_factor, rank, total_in_div),
         )
         if cur.rowcount > 0:

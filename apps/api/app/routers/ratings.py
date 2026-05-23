@@ -16,6 +16,7 @@ def list_rankings(
     season_year: int = Query(..., description="Season year"),
     week_number: int = Query(..., description="Week number"),
     division: str | None = Query(None, description="Filter by division"),
+    source: str = Query("engine", description="Rating source: 'engine' or 'lhsaa_official'"),
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -29,6 +30,7 @@ def list_rankings(
             Sport.name.ilike(sport),
             PowerRating.season_year == season_year,
             PowerRating.week_number == week_number,
+            PowerRating.source == source,
         )
     )
     if division:
@@ -57,11 +59,16 @@ def list_rankings(
 def get_team_ratings(
     team_id: int,
     season_year: int = Query(..., description="Season year"),
+    source: str = Query("engine", description="Rating source: 'engine' or 'lhsaa_official'"),
     db: Session = Depends(get_db),
 ):
     ratings = (
         db.query(PowerRating)
-        .filter(PowerRating.team_id == team_id, PowerRating.season_year == season_year)
+        .filter(
+            PowerRating.team_id == team_id,
+            PowerRating.season_year == season_year,
+            PowerRating.source == source,
+        )
         .order_by(PowerRating.week_number.asc())
         .all()
     )
@@ -136,13 +143,14 @@ def recalculate_ratings(
         for rank, (tid, _) in enumerate(sorted_teams, 1):
             ranks[tid] = rank
 
-    # Upsert power ratings
+    # Upsert power ratings (engine-source only; LHSAA-official rows live in their own partial index)
     updated = 0
     for tid, t in result.items():
         existing = db.query(PowerRating).filter(
             PowerRating.team_id == tid,
             PowerRating.week_number == week_number,
             PowerRating.season_year == season_year,
+            PowerRating.source == "engine",
         ).first()
         if existing:
             existing.power_rating = t.power_rating
@@ -155,6 +163,7 @@ def recalculate_ratings(
                 power_rating=t.power_rating, strength_factor=t.strength_factor,
                 rank_in_division=ranks.get(tid),
                 total_teams_in_division=div_counts.get(t.division),
+                source="engine",
             ))
         updated += 1
     db.commit()

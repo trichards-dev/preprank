@@ -30,7 +30,7 @@ def team_share_image(team_id: int, db: Session = Depends(get_db)):
     school = db.query(School).filter(School.id == team.school_id).first()
     rating = (
         db.query(PowerRating)
-        .filter(PowerRating.team_id == team_id)
+        .filter(PowerRating.team_id == team_id, PowerRating.source == "engine")
         .order_by(PowerRating.week_number.desc())
         .first()
     )
@@ -52,10 +52,10 @@ def game_share_image(game_id: int, db: Session = Depends(get_db)):
     home_school = db.query(School).join(Team).filter(Team.id == game.home_team_id).first()
     away_school = db.query(School).join(Team).filter(Team.id == game.away_team_id).first()
     home_rating = db.query(PowerRating).filter(
-        PowerRating.team_id == game.home_team_id
+        PowerRating.team_id == game.home_team_id, PowerRating.source == "engine"
     ).order_by(PowerRating.week_number.desc()).first()
     away_rating = db.query(PowerRating).filter(
-        PowerRating.team_id == game.away_team_id
+        PowerRating.team_id == game.away_team_id, PowerRating.source == "engine"
     ).order_by(PowerRating.week_number.desc()).first()
 
     data = generate_game_card(

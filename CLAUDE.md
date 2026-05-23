@@ -77,3 +77,7 @@ Set `NEXT_PUBLIC_API_URL` in `apps/web` to the port you actually run the API on 
 ## Archive-branch caveat (avoid editing the wrong API)
 
 The `archive/pre-consolidation` branch holds a **divergent, retired** API implementation: it uses a `/power-ratings` contract (no `/api/v1`), an async `asyncpg` engine, and a `models/` package instead of `app/models.py`. The canonical API on `master` is the `/api/v1` sync-SQLAlchemy one. If you encounter `power_ratings` routers or `create_async_engine`, you are looking at the old code — do not port its patterns forward.
+
+## Skills to use on this project
+
+- **`/software-design`** — the multi-agent design team (Product Manager, Solution Architect, DB Designer, Backend, Frontend, UX, Security, DevOps, QA, Claude AI Expert, Claude Code Expert). Invoke whenever this app needs a new architecture decision, a feature spec, a tech-stack/build-vs-buy evaluation, or a meaningful refactor that crosses multiple components. The 11 sub-agents run in parallel and produce a production-ready specification rather than a one-pass design. Don't reach for this for routine bug fixes or small changes — use it for the things that actually warrant the depth.

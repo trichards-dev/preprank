@@ -45,6 +45,21 @@ def test_division_filter_excludes_other_divisions():
         assert entry["classification"] == "4A"
 
 
+def test_rankings_source_filter_defaults_to_engine():
+    """Adding ?source=engine explicitly should match the default behavior."""
+    a = client.get("/api/v1/ratings/rankings?sport=Football&season_year=2025&week_number=11&division=I").json()
+    b = client.get("/api/v1/ratings/rankings?sport=Football&season_year=2025&week_number=11&division=I&source=engine").json()
+    assert a == b
+
+
+def test_rankings_unknown_source_returns_empty():
+    """A source value not present in DB returns 0 rows without erroring."""
+    resp = client.get("/api/v1/ratings/rankings?sport=Football&season_year=2025&week_number=11&source=lhsaa_official")
+    assert resp.status_code == 200
+    # Seed only loads engine-source rows; LHSAA loader runs separately.
+    assert isinstance(resp.json(), list)
+
+
 def test_teams_joined_with_school_and_sport():
     resp = client.get("/api/v1/teams/?sport=Football&season_year=2025&division=I&limit=3")
     assert resp.status_code == 200

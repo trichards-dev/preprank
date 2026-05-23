@@ -100,11 +100,11 @@ class PowerRating(Base):
     strength_factor = Column(Numeric(6, 2))
     rank_in_division = Column(Integer)
     total_teams_in_division = Column(Integer)
+    source = Column(String(32), nullable=False, default="engine")
+    snapshot_date = Column(Date, nullable=True)
     calculated_at = Column(DateTime, server_default=func.now())
 
     team = relationship("Team", back_populates="power_ratings")
-
-    __table_args__ = (UniqueConstraint("team_id", "week_number", "season_year"),)
 
 
 class Simulation(Base):

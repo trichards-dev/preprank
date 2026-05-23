@@ -31,4 +31,7 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Cached PDFs (reproducible from scripts/lhsaa_pdf_index.json)
+data/pdfs/
+
 .vercel

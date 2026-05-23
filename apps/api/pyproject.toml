@@ -32,4 +32,6 @@ dev = [
     "pytest>=8.2.0",
     "httpx>=0.27.0",
     "ruff>=0.4.0",
+    "pdfplumber>=0.11.0",
+    "firecrawl-py>=2.0.0",
 ]

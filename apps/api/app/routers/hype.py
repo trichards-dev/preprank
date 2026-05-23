@@ -26,7 +26,7 @@ class HypeScoreOut(BaseModel):
 def _build_hype_response(db, hype, team, school) -> HypeScoreOut:
     # Get latest power rating
     pr = db.query(PowerRating).filter(
-        PowerRating.team_id == team.id
+        PowerRating.team_id == team.id, PowerRating.source == "engine"
     ).order_by(PowerRating.week_number.desc()).first()
 
     return HypeScoreOut(
