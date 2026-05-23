@@ -44,22 +44,40 @@ def predict_game(
     config: PredictionConfig,
     home_margin_signal: float = 0.0,
     away_margin_signal: float = 0.0,
+    home_form_signal: float = 0.0,
+    away_form_signal: float = 0.0,
 ) -> float:
     """Return P(home_team wins) given pre-game ratings.
 
-    Pure function over :func:`win_probability_v2`. When ``'margin'`` is in
-    ``config.enabled_features``, the per-sport weight from
-    ``config.margin_weight_by_sport`` (falling back to ``config.margin_weight``)
-    is applied to each side's pre-game margin signal and added to its
-    pre-game rating before the matchup is fed to ``win_probability_v2``.
+    Pure function over :func:`win_probability_v2`. Two prediction-layer
+    signals can shift each side's effective rating before the matchup is
+    fed to ``win_probability_v2``:
 
-    When ``'margin'`` is not enabled, the margin signals are ignored and
-    the call collapses to the legacy ``win_probability_v2`` path —
-    guaranteeing zero behavior change for baseline runs.
+    * ``margin`` (Phase 2a): when ``'margin' in config.enabled_features``,
+      the per-sport weight from ``config.margin_weight_by_sport`` (falling
+      back to ``config.margin_weight``) is applied to each side's pre-game
+      capped-margin signal.
+    * ``recent_form`` (Phase 2b): when ``'recent_form' in config.enabled_features``,
+      the per-sport weight from ``config.form_weight_by_sport`` (falling
+      back to ``config.form_weight``) is applied to each side's pre-game
+      recency-weighted form signal.
+
+    When neither feature is enabled, both signals are ignored and the
+    call collapses to the legacy ``win_probability_v2`` path —
+    guaranteeing zero behavior change for baseline runs. When both are
+    enabled the contributions are additive.
     """
+    home_eff = home_rating
+    away_eff = away_rating
+
     if "margin" in config.enabled_features:
         weight = config.margin_weight_by_sport.get(sport, config.margin_weight)
-        home_eff = home_rating + weight * home_margin_signal
-        away_eff = away_rating + weight * away_margin_signal
-        return win_probability_v2(home_eff, away_eff, config, sport=sport)
-    return win_probability_v2(home_rating, away_rating, config, sport=sport)
+        home_eff += weight * home_margin_signal
+        away_eff += weight * away_margin_signal
+
+    if "recent_form" in config.enabled_features:
+        fw = config.form_weight_by_sport.get(sport, config.form_weight)
+        home_eff += fw * home_form_signal
+        away_eff += fw * away_form_signal
+
+    return win_probability_v2(home_eff, away_eff, config, sport=sport)

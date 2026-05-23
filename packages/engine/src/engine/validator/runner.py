@@ -26,6 +26,7 @@ from typing import Any
 
 from engine.prediction.config import PredictionConfig
 from engine.prediction.features.margin import precompute_team_week_margins
+from engine.prediction.features.recent_form import precompute_team_week_form
 
 from .data import (
     ALL_SPORTS,
@@ -229,9 +230,15 @@ def _resolve_pregame_rating(
 
 def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[PredictionRecord]:
     margin_enabled = "margin" in config.enabled_features
+    form_enabled = "recent_form" in config.enabled_features
     margin_table: dict[tuple[int, int], float] = (
         precompute_team_week_margins(inputs.games, inputs.sport_name, config)
         if margin_enabled
+        else {}
+    )
+    form_table: dict[tuple[int, int], float] = (
+        precompute_team_week_form(inputs.games, inputs.sport_name, config)
+        if form_enabled
         else {}
     )
 
@@ -252,16 +259,18 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
             inputs.division_prior_medians,
         )
 
-        if margin_enabled:
-            h_margin = margin_table.get((h_team, w - 1), 0.0)
-            a_margin = margin_table.get((a_team, w - 1), 0.0)
-            p_home = predict_game(
-                h_rating, a_rating, inputs.sport_name, config,
-                home_margin_signal=h_margin,
-                away_margin_signal=a_margin,
-            )
-        else:
-            p_home = predict_game(h_rating, a_rating, inputs.sport_name, config)
+        h_margin = margin_table.get((h_team, w - 1), 0.0) if margin_enabled else 0.0
+        a_margin = margin_table.get((a_team, w - 1), 0.0) if margin_enabled else 0.0
+        h_form = form_table.get((h_team, w - 1), 0.0) if form_enabled else 0.0
+        a_form = form_table.get((a_team, w - 1), 0.0) if form_enabled else 0.0
+
+        p_home = predict_game(
+            h_rating, a_rating, inputs.sport_name, config,
+            home_margin_signal=h_margin,
+            away_margin_signal=a_margin,
+            home_form_signal=h_form,
+            away_form_signal=a_form,
+        )
 
         hs = g.get("home_score")
         as_ = g.get("away_score")

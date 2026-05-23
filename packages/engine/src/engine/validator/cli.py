@@ -28,6 +28,10 @@ from .data import ALL_SPORTS
 # Default grid of candidate margin-weight (alpha) values; small/cheap by design.
 DEFAULT_MARGIN_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 
+# Default grid for the Phase-2b recent-form alpha. Same scale as margin since
+# both signals are in capped-margin units.
+DEFAULT_FORM_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+
 # Phase-2a fitted-parameter file. Lives inside the package so CLI consumers
 # pick it up without extra config wiring.
 FITTED_PARAMS_PATH: Path = (
@@ -48,10 +52,12 @@ def _load_fitted_params(path: Path = FITTED_PARAMS_PATH) -> dict:
 def _build_config_for_label(label: str) -> PredictionConfig:
     """Construct the ``PredictionConfig`` matching the given CLI ``--config`` label.
 
-    ``baseline`` -> default config. ``phase-2a`` -> margin feature enabled with
-    per-sport weights loaded from ``fitted_params.json`` (falls back to the
-    default scalar ``margin_weight`` if no fitted file is present, but in
-    practice the fit step should be run first).
+    ``baseline`` -> default config. ``phase-2a`` -> margin feature enabled
+    with per-sport weights loaded from ``fitted_params.json`` (falls back
+    to the default scalar ``margin_weight`` if no fitted file is present,
+    but in practice the fit step should be run first). ``phase-2b`` ->
+    margin + recent_form, both with per-sport weights from
+    ``fitted_params.json``.
     """
     if label == "baseline":
         return PredictionConfig.baseline()
@@ -62,6 +68,19 @@ def _build_config_for_label(label: str) -> PredictionConfig:
             enabled_features=["margin"],
             margin_weight_by_sport={
                 str(k): float(v) for k, v in margin_weight_by_sport.items()
+            },
+        )
+    if label == "phase-2b":
+        fitted = _load_fitted_params()
+        margin_weight_by_sport = fitted.get("margin_weight_by_sport", {}) or {}
+        form_weight_by_sport = fitted.get("form_weight_by_sport", {}) or {}
+        return PredictionConfig(
+            enabled_features=["margin", "recent_form"],
+            margin_weight_by_sport={
+                str(k): float(v) for k, v in margin_weight_by_sport.items()
+            },
+            form_weight_by_sport={
+                str(k): float(v) for k, v in form_weight_by_sport.items()
             },
         )
     return PredictionConfig()
@@ -144,16 +163,31 @@ def _parse_grid(arg: str) -> list[float]:
 
 
 def _cmd_fit(args: argparse.Namespace) -> int:
-    """Grid-search per-sport weights for the requested feature and write fitted_params.json."""
-    if args.feature != "margin":
-        print(f"Unknown --feature {args.feature!r}; only 'margin' is supported.", file=sys.stderr)
+    """Grid-search per-sport weights for the requested feature and write fitted_params.json.
+
+    ``--feature margin`` is Phase 2a: fit per-sport ``margin_weight`` from
+    scratch.
+
+    ``--feature recent_form`` is Phase 2b: fit per-sport ``form_weight``
+    on top of already-fit ``margin_weight_by_sport`` (read from
+    ``fitted_params.json``). The grid search keeps the margin signal on
+    so we measure the marginal lift of form *given* the Phase 2a signal.
+    """
+    if args.feature not in {"margin", "recent_form"}:
+        print(
+            f"Unknown --feature {args.feature!r}; expected 'margin' or 'recent_form'.",
+            file=sys.stderr,
+        )
         return 2
 
     from .runner import run_validation
 
     train_seasons = _parse_seasons(args.train_seasons)
     sports = _parse_sports(args.sports) if args.sports else list(ALL_SPORTS)
-    grid = _parse_grid(args.grid) if args.grid else list(DEFAULT_MARGIN_WEIGHT_GRID)
+    default_grid = (
+        DEFAULT_MARGIN_WEIGHT_GRID if args.feature == "margin" else DEFAULT_FORM_WEIGHT_GRID
+    )
+    grid = _parse_grid(args.grid) if args.grid else list(default_grid)
 
     # Reuse one Supabase client across the whole sweep so we don't re-auth
     # per candidate weight per sport.
@@ -168,6 +202,16 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             return 2
         sb = create_client(url, key)
 
+    existing = _load_fitted_params()
+    existing_margin_w = {
+        str(k): float(v)
+        for k, v in (existing.get("margin_weight_by_sport") or {}).items()
+    }
+    existing_form_w = {
+        str(k): float(v)
+        for k, v in (existing.get("form_weight_by_sport") or {}).items()
+    }
+
     fitted: dict[str, float] = {}
     print(f"Fitting feature={args.feature!r} over sports={sports} train_seasons={train_seasons}")
     print(f"Grid: {grid}")
@@ -176,13 +220,33 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         best_w: float | None = None
         best_acc: float = -1.0
         for w in grid:
-            cfg = PredictionConfig(
-                enabled_features=["margin"],
-                margin_weight_by_sport={sport: float(w)},
-            )
+            if args.feature == "margin":
+                cfg = PredictionConfig(
+                    enabled_features=["margin"],
+                    margin_weight_by_sport={sport: float(w)},
+                )
+                label = f"fit-margin-{sport}-{w}"
+            else:
+                # Phase 2b: fit form on top of fitted margin. Use the already-fit
+                # margin weight for this sport (skip the sport with a warning if
+                # we have none — that means Phase 2a wasn't run).
+                margin_w = existing_margin_w.get(sport)
+                if margin_w is None:
+                    print(
+                        f"  {sport:<18} skipped (no fitted margin_weight; run "
+                        f"`fit --feature margin` first)",
+                        file=sys.stderr,
+                    )
+                    break
+                cfg = PredictionConfig(
+                    enabled_features=["margin", "recent_form"],
+                    margin_weight_by_sport={sport: float(margin_w)},
+                    form_weight_by_sport={sport: float(w)},
+                )
+                label = f"fit-form-{sport}-{w}"
             result = run_validation(
                 config=cfg,
-                config_label=f"fit-margin-{sport}-{w}",
+                config_label=label,
                 sports=[sport],
                 seasons=train_seasons,
                 # Treat the whole training window as train; no holdout split during fit.
@@ -204,7 +268,19 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             fitted[sport] = float(best_w)
             print(f"  -> {sport}: best w={best_w} (train_acc={best_acc:.4f})")
 
-    payload = {"margin_weight_by_sport": fitted}
+    # Merge into the existing file rather than overwriting other features' weights.
+    if args.feature == "margin":
+        payload = {
+            "margin_weight_by_sport": fitted,
+            "form_weight_by_sport": existing_form_w,
+        }
+    else:
+        payload = {
+            "margin_weight_by_sport": existing_margin_w,
+            "form_weight_by_sport": fitted,
+        }
+    # Drop empty maps for cleanliness.
+    payload = {k: v for k, v in payload.items() if v}
     FITTED_PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
     FITTED_PARAMS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(f"Wrote {FITTED_PARAMS_PATH}")
@@ -272,8 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_fit.add_argument(
         "--feature",
         required=True,
-        choices=["margin"],
-        help="Which prediction feature to fit (currently only 'margin').",
+        choices=["margin", "recent_form"],
+        help=(
+            "Which prediction feature to fit. 'margin' = Phase 2a from scratch; "
+            "'recent_form' = Phase 2b on top of already-fit margin weights."
+        ),
     )
     p_fit.add_argument(
         "--train-seasons",

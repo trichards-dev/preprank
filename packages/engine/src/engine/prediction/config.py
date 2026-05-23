@@ -60,6 +60,12 @@ class PredictionConfig(BaseModel):
     recent_form_weight: float = 1.5
     """Multiplicative weight applied to recent-window games when 'recent_form' is on."""
 
+    form_weight_by_sport: dict[str, float] = Field(default_factory=dict)
+    """Per-sport weight (alpha) on the recent-form signal."""
+
+    form_weight: float = 0.0
+    """Default weight on the recent-form signal. 0.0 = feature disabled."""
+
     # --- Phase 2d: strength-of-schedule depth ---
     sos_depth: int = 1
     """SOS recursion depth. LHSAA's own formula uses depth=1 (opponents' win pct only)."""
