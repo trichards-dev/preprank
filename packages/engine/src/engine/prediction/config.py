@@ -47,6 +47,12 @@ class PredictionConfig(BaseModel):
     )
     """Per-sport margin caps used when 'margin' is enabled to dampen blowouts."""
 
+    margin_weight_by_sport: dict[str, float] = Field(default_factory=dict)
+    """Per-sport weight (alpha) on the capped-margin signal. Empty = use margin_weight."""
+
+    margin_weight: float = 0.0
+    """Default weight on the capped-margin signal. 0.0 = feature disabled even if 'margin' in enabled_features."""
+
     # --- Phase 2b: recent form ---
     recent_form_window: int = 3
     """Window size: how many of a team's most-recent games count as 'recent'."""

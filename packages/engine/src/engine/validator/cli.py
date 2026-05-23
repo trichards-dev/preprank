@@ -16,6 +16,7 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -23,6 +24,47 @@ from pathlib import Path
 from engine.prediction.config import PredictionConfig
 
 from .data import ALL_SPORTS
+
+# Default grid of candidate margin-weight (alpha) values; small/cheap by design.
+DEFAULT_MARGIN_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+# Phase-2a fitted-parameter file. Lives inside the package so CLI consumers
+# pick it up without extra config wiring.
+FITTED_PARAMS_PATH: Path = (
+    Path(__file__).resolve().parents[1] / "prediction" / "fitted_params.json"
+)
+
+
+def _load_fitted_params(path: Path = FITTED_PARAMS_PATH) -> dict:
+    """Return ``fitted_params.json`` as a dict, or ``{}`` if missing/empty."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text()) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _build_config_for_label(label: str) -> PredictionConfig:
+    """Construct the ``PredictionConfig`` matching the given CLI ``--config`` label.
+
+    ``baseline`` -> default config. ``phase-2a`` -> margin feature enabled with
+    per-sport weights loaded from ``fitted_params.json`` (falls back to the
+    default scalar ``margin_weight`` if no fitted file is present, but in
+    practice the fit step should be run first).
+    """
+    if label == "baseline":
+        return PredictionConfig.baseline()
+    if label == "phase-2a":
+        fitted = _load_fitted_params()
+        margin_weight_by_sport = fitted.get("margin_weight_by_sport", {}) or {}
+        return PredictionConfig(
+            enabled_features=["margin"],
+            margin_weight_by_sport={
+                str(k): float(v) for k, v in margin_weight_by_sport.items()
+            },
+        )
+    return PredictionConfig()
 
 
 def _parse_sports(arg: str) -> list[str]:
@@ -58,7 +100,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     holdout = _parse_seasons(args.holdout) if args.holdout else None
     n_boot = 0 if args.no_bootstrap else args.bootstrap
 
-    config = PredictionConfig.baseline() if args.config == "baseline" else PredictionConfig()
+    config = _build_config_for_label(args.config)
 
     result = run_validation(
         config=config,
@@ -93,6 +135,79 @@ def _cmd_diff(args: argparse.Namespace) -> int:
         )
     if "_output_dir" in payload:
         print(f"Diff artifacts: {payload['_output_dir']}")
+    return 0
+
+
+def _parse_grid(arg: str) -> list[float]:
+    """Parse a comma-separated grid of floats, e.g. '0.5,1.0,1.5'."""
+    return [float(x.strip()) for x in arg.split(",") if x.strip()]
+
+
+def _cmd_fit(args: argparse.Namespace) -> int:
+    """Grid-search per-sport weights for the requested feature and write fitted_params.json."""
+    if args.feature != "margin":
+        print(f"Unknown --feature {args.feature!r}; only 'margin' is supported.", file=sys.stderr)
+        return 2
+
+    from .runner import run_validation
+
+    train_seasons = _parse_seasons(args.train_seasons)
+    sports = _parse_sports(args.sports) if args.sports else list(ALL_SPORTS)
+    grid = _parse_grid(args.grid) if args.grid else list(DEFAULT_MARGIN_WEIGHT_GRID)
+
+    # Reuse one Supabase client across the whole sweep so we don't re-auth
+    # per candidate weight per sport.
+    sb = None
+    if not args.dry_run:
+        from supabase import create_client
+
+        url = os.environ.get("SUPABASE_URL", "https://ywlaekkxkwfznwuupggi.supabase.co")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not key:
+            print("SUPABASE_SERVICE_ROLE_KEY env var is required", file=sys.stderr)
+            return 2
+        sb = create_client(url, key)
+
+    fitted: dict[str, float] = {}
+    print(f"Fitting feature={args.feature!r} over sports={sports} train_seasons={train_seasons}")
+    print(f"Grid: {grid}")
+
+    for sport in sports:
+        best_w: float | None = None
+        best_acc: float = -1.0
+        for w in grid:
+            cfg = PredictionConfig(
+                enabled_features=["margin"],
+                margin_weight_by_sport={sport: float(w)},
+            )
+            result = run_validation(
+                config=cfg,
+                config_label=f"fit-margin-{sport}-{w}",
+                sports=[sport],
+                seasons=train_seasons,
+                # Treat the whole training window as train; no holdout split during fit.
+                holdout_seasons=[],
+                write_to_db=False,
+                output_dir=Path(args.output_dir),
+                n_bootstrap=0,
+                supabase_client=sb,
+            )
+            block = result.sports.get(sport, {})
+            train_block = block.get("train", {})
+            acc = train_block.get("game_winner_acc", 0.0)
+            n = train_block.get("n_games", 0)
+            print(f"  {sport:<18} w={w:<5} train_acc={acc:.4f} n={n}")
+            if acc > best_acc:
+                best_acc = acc
+                best_w = w
+        if best_w is not None:
+            fitted[sport] = float(best_w)
+            print(f"  -> {sport}: best w={best_w} (train_acc={best_acc:.4f})")
+
+    payload = {"margin_weight_by_sport": fitted}
+    FITTED_PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FITTED_PARAMS_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    print(f"Wrote {FITTED_PARAMS_PATH}")
     return 0
 
 
@@ -149,6 +264,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", help="List prior runs from DB")
     p_list.add_argument("--limit", type=int, default=200)
     p_list.set_defaults(func=_cmd_list)
+
+    p_fit = sub.add_parser(
+        "fit",
+        help="Fit feature weights from training data, write to fitted_params.json",
+    )
+    p_fit.add_argument(
+        "--feature",
+        required=True,
+        choices=["margin"],
+        help="Which prediction feature to fit (currently only 'margin').",
+    )
+    p_fit.add_argument(
+        "--train-seasons",
+        default="2021-2024",
+        help="Training seasons (e.g. '2021-2024').",
+    )
+    p_fit.add_argument(
+        "--sports",
+        default="all",
+        help="Sports to fit, comma-separated or 'all'.",
+    )
+    p_fit.add_argument(
+        "--grid",
+        default=None,
+        help="Override the default weight grid (e.g. '0.5,1.0,1.5,2.0').",
+    )
+    p_fit.add_argument(
+        "--output-dir",
+        default="reports",
+        help="Reports dir for in-memory runs (no DB writes).",
+    )
+    p_fit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip Supabase client construction (useful for tests).",
+    )
+    p_fit.set_defaults(func=_cmd_fit)
+
     return p
 
 

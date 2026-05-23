@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from engine.prediction.config import PredictionConfig
+from engine.prediction.features.margin import precompute_team_week_margins
 
 from .data import (
     ALL_SPORTS,
@@ -227,6 +228,13 @@ def _resolve_pregame_rating(
 
 
 def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[PredictionRecord]:
+    margin_enabled = "margin" in config.enabled_features
+    margin_table: dict[tuple[int, int], float] = (
+        precompute_team_week_margins(inputs.games, inputs.sport_name, config)
+        if margin_enabled
+        else {}
+    )
+
     preds: list[PredictionRecord] = []
     for g in inputs.games:
         w = int(g["_engine_week"])
@@ -243,7 +251,17 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
             a_team, w, a_div, inputs.engine_ratings, inputs.prior_finals,
             inputs.division_prior_medians,
         )
-        p_home = predict_game(h_rating, a_rating, inputs.sport_name, config)
+
+        if margin_enabled:
+            h_margin = margin_table.get((h_team, w - 1), 0.0)
+            a_margin = margin_table.get((a_team, w - 1), 0.0)
+            p_home = predict_game(
+                h_rating, a_rating, inputs.sport_name, config,
+                home_margin_signal=h_margin,
+                away_margin_signal=a_margin,
+            )
+        else:
+            p_home = predict_game(h_rating, a_rating, inputs.sport_name, config)
 
         hs = g.get("home_score")
         as_ = g.get("away_score")
@@ -285,7 +303,9 @@ def _metric_block(preds: list[PredictionRecord]) -> dict:
 def _bootstrap_block(
     preds: list[PredictionRecord], n_resamples: int, seed: int
 ) -> dict:
-    if not preds:
+    if not preds or n_resamples <= 0:
+        # n_resamples=0 is used by the fit grid search to skip the expensive
+        # CI estimation; return empty intervals rather than raising.
         return {
             "game_winner_acc": [0.0, 0.0],
             "brier": [0.0, 0.0],
