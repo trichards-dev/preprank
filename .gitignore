@@ -34,4 +34,7 @@ Thumbs.db
 # Cached PDFs (reproducible from scripts/lhsaa_pdf_index.json)
 data/pdfs/
 
+# Validator run artifacts (reproducible from game_predictions table + scripts)
+reports/
+
 .vercel

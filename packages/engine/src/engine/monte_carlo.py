@@ -8,7 +8,8 @@ from engine.types import (
     ScheduledGame, SimulationConfig, TeamProjection,
 )
 from engine.power_rating import calculate_all_ratings, _eligible_games, _build_team_games, calculate_game_points
-from engine.win_probability import win_probability_batch
+from engine.win_probability import win_probability_batch, win_probability_batch_v2
+from engine.prediction.config import PredictionConfig
 
 
 def run_simulation(
@@ -17,8 +18,19 @@ def run_simulation(
     remaining_games: list[ScheduledGame],
     config: SimulationConfig,
     seed: int | None = None,
+    prediction_config: PredictionConfig | None = None,
 ) -> dict[int, TeamProjection]:
-    """Run Monte Carlo simulation and return projections for all teams."""
+    """Run Monte Carlo simulation and return projections for all teams.
+
+    When ``prediction_config`` is ``None`` (the default), the simulation uses
+    ``config.home_advantage`` / ``config.k_factor`` and the legacy
+    :func:`win_probability_batch` path - existing callers are unaffected.
+
+    When a :class:`PredictionConfig` is supplied, its ``home_advantage`` /
+    ``k_factor`` override ``config``'s values and the routing flips to
+    :func:`win_probability_batch_v2`. With a default ``PredictionConfig()``
+    this still produces numerically identical results.
+    """
     rng = np.random.default_rng(seed)
     num_runs = config.num_runs
     num_remaining = len(remaining_games)
@@ -37,7 +49,15 @@ def run_simulation(
     away_ratings = np.array([current[g.away_team_id].power_rating for g in remaining_games])
 
     # Win probabilities for all remaining games
-    probs = win_probability_batch(home_ratings, away_ratings, config.home_advantage, config.k_factor)
+    if prediction_config is None:
+        probs = win_probability_batch(home_ratings, away_ratings, config.home_advantage, config.k_factor)
+    else:
+        probs = win_probability_batch_v2(
+            home_ratings,
+            away_ratings,
+            prediction_config,
+            sport=config.sport_name,
+        )
 
     # Generate all random outcomes at once: (num_runs, num_remaining)
     random_draws = rng.random((num_runs, num_remaining))
