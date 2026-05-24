@@ -32,6 +32,12 @@ DEFAULT_MARGIN_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 # both signals are in capped-margin units.
 DEFAULT_FORM_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 
+# Default grid for the Phase-2c per-sport home-field advantage (rating-point
+# units). Includes negative candidates because LHSAA-rating-difference HFA may
+# be negative for some sports; the orchestrator's acceptance bar is "any sport
+# lifts >= 1 pt" of train accuracy vs the baseline.
+DEFAULT_HFA_GRID: list[float] = [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+
 # Phase-2a fitted-parameter file. Lives inside the package so CLI consumers
 # pick it up without extra config wiring.
 FITTED_PARAMS_PATH: Path = (
@@ -57,10 +63,20 @@ def _build_config_for_label(label: str) -> PredictionConfig:
     to the default scalar ``margin_weight`` if no fitted file is present,
     but in practice the fit step should be run first). ``phase-2b`` ->
     margin + recent_form, both with per-sport weights from
+    ``fitted_params.json``. ``phase-2c`` -> margin + per-sport HFA
+    overrides, both loaded from ``fitted_params.json``. (Note: ``hfa`` is
+    not in ``enabled_features`` because HFA is an always-on parameter of
+    the logistic primitive, not a separately toggleable signal.)
+
+    Prior phases (``baseline`` and ``phase-2a``) explicitly pin
+    ``home_advantage_by_sport={}`` so they remain numerically identical to
+    their previously-published runs even after Phase 2c populates
     ``fitted_params.json``.
     """
     if label == "baseline":
-        return PredictionConfig.baseline()
+        # Pin HFA map empty so a later fit-and-write does not silently
+        # change baseline numbers.
+        return PredictionConfig(home_advantage_by_sport={})
     if label == "phase-2a":
         fitted = _load_fitted_params()
         margin_weight_by_sport = fitted.get("margin_weight_by_sport", {}) or {}
@@ -69,6 +85,9 @@ def _build_config_for_label(label: str) -> PredictionConfig:
             margin_weight_by_sport={
                 str(k): float(v) for k, v in margin_weight_by_sport.items()
             },
+            # Pin HFA map empty so phase-2a stays at the global 0.5 even
+            # after Phase 2c writes per-sport entries to fitted_params.json.
+            home_advantage_by_sport={},
         )
     if label == "phase-2b":
         fitted = _load_fitted_params()
@@ -81,6 +100,20 @@ def _build_config_for_label(label: str) -> PredictionConfig:
             },
             form_weight_by_sport={
                 str(k): float(v) for k, v in form_weight_by_sport.items()
+            },
+        )
+    if label == "phase-2c":
+        fitted = _load_fitted_params()
+        margin_weight_by_sport = fitted.get("margin_weight_by_sport", {}) or {}
+        home_advantage_by_sport = fitted.get("home_advantage_by_sport", {}) or {}
+        return PredictionConfig(
+            # recent_form was rejected in Phase 2b — keep it off.
+            enabled_features=["margin"],
+            margin_weight_by_sport={
+                str(k): float(v) for k, v in margin_weight_by_sport.items()
+            },
+            home_advantage_by_sport={
+                str(k): float(v) for k, v in home_advantage_by_sport.items()
             },
         )
     return PredictionConfig()
@@ -172,10 +205,16 @@ def _cmd_fit(args: argparse.Namespace) -> int:
     on top of already-fit ``margin_weight_by_sport`` (read from
     ``fitted_params.json``). The grid search keeps the margin signal on
     so we measure the marginal lift of form *given* the Phase 2a signal.
+
+    ``--feature hfa`` is Phase 2c: fit per-sport home-field advantage
+    (the logistic-primitive HFA constant, in rating-point units) on top
+    of already-fit ``margin_weight_by_sport``. recent_form is left OFF
+    because Phase 2b was rejected.
     """
-    if args.feature not in {"margin", "recent_form"}:
+    if args.feature not in {"margin", "recent_form", "hfa"}:
         print(
-            f"Unknown --feature {args.feature!r}; expected 'margin' or 'recent_form'.",
+            f"Unknown --feature {args.feature!r}; expected 'margin', "
+            f"'recent_form', or 'hfa'.",
             file=sys.stderr,
         )
         return 2
@@ -184,14 +223,18 @@ def _cmd_fit(args: argparse.Namespace) -> int:
 
     train_seasons = _parse_seasons(args.train_seasons)
     sports = _parse_sports(args.sports) if args.sports else list(ALL_SPORTS)
-    default_grid = (
-        DEFAULT_MARGIN_WEIGHT_GRID if args.feature == "margin" else DEFAULT_FORM_WEIGHT_GRID
-    )
+    if args.feature == "margin":
+        default_grid = DEFAULT_MARGIN_WEIGHT_GRID
+    elif args.feature == "recent_form":
+        default_grid = DEFAULT_FORM_WEIGHT_GRID
+    else:  # hfa
+        default_grid = DEFAULT_HFA_GRID
     grid = _parse_grid(args.grid) if args.grid else list(default_grid)
 
-    # Reuse one Supabase client across the whole sweep so we don't re-auth
-    # per candidate weight per sport.
-    sb = None
+    # Build a fresh Supabase client per fit iteration so the HTTP/2 stream
+    # counter doesn't accumulate over thousands of grid-search REST calls
+    # (Supabase terminates a single connection around stream_id 19999).
+    sb_factory = None
     if not args.dry_run:
         from supabase import create_client
 
@@ -200,7 +243,10 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         if not key:
             print("SUPABASE_SERVICE_ROLE_KEY env var is required", file=sys.stderr)
             return 2
-        sb = create_client(url, key)
+        # Capture url/key in the closure
+        def _factory(_u=url, _k=key):
+            return create_client(_u, _k)
+        sb_factory = _factory
 
     existing = _load_fitted_params()
     existing_margin_w = {
@@ -210,6 +256,10 @@ def _cmd_fit(args: argparse.Namespace) -> int:
     existing_form_w = {
         str(k): float(v)
         for k, v in (existing.get("form_weight_by_sport") or {}).items()
+    }
+    existing_hfa = {
+        str(k): float(v)
+        for k, v in (existing.get("home_advantage_by_sport") or {}).items()
     }
 
     fitted: dict[str, float] = {}
@@ -226,7 +276,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
                     margin_weight_by_sport={sport: float(w)},
                 )
                 label = f"fit-margin-{sport}-{w}"
-            else:
+            elif args.feature == "recent_form":
                 # Phase 2b: fit form on top of fitted margin. Use the already-fit
                 # margin weight for this sport (skip the sport with a warning if
                 # we have none — that means Phase 2a wasn't run).
@@ -244,6 +294,24 @@ def _cmd_fit(args: argparse.Namespace) -> int:
                     form_weight_by_sport={sport: float(w)},
                 )
                 label = f"fit-form-{sport}-{w}"
+            else:  # hfa
+                # Phase 2c: fit per-sport HFA on top of fitted margin.
+                # recent_form stays OFF (rejected in 2b). Skip the sport
+                # if Phase 2a hasn't been run yet for it.
+                margin_w = existing_margin_w.get(sport)
+                if margin_w is None:
+                    print(
+                        f"  {sport:<18} skipped (no fitted margin_weight; run "
+                        f"`fit --feature margin` first)",
+                        file=sys.stderr,
+                    )
+                    break
+                cfg = PredictionConfig(
+                    enabled_features=["margin"],
+                    margin_weight_by_sport={sport: float(margin_w)},
+                    home_advantage_by_sport={sport: float(w)},
+                )
+                label = f"fit-hfa-{sport}-{w}"
             result = run_validation(
                 config=cfg,
                 config_label=label,
@@ -254,7 +322,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
                 write_to_db=False,
                 output_dir=Path(args.output_dir),
                 n_bootstrap=0,
-                supabase_client=sb,
+                supabase_client_factory=sb_factory,
             )
             block = result.sports.get(sport, {})
             train_block = block.get("train", {})
@@ -273,11 +341,19 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         payload = {
             "margin_weight_by_sport": fitted,
             "form_weight_by_sport": existing_form_w,
+            "home_advantage_by_sport": existing_hfa,
         }
-    else:
+    elif args.feature == "recent_form":
         payload = {
             "margin_weight_by_sport": existing_margin_w,
             "form_weight_by_sport": fitted,
+            "home_advantage_by_sport": existing_hfa,
+        }
+    else:  # hfa
+        payload = {
+            "margin_weight_by_sport": existing_margin_w,
+            "form_weight_by_sport": existing_form_w,
+            "home_advantage_by_sport": fitted,
         }
     # Drop empty maps for cleanliness.
     payload = {k: v for k, v in payload.items() if v}
@@ -348,10 +424,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_fit.add_argument(
         "--feature",
         required=True,
-        choices=["margin", "recent_form"],
+        choices=["margin", "recent_form", "hfa"],
         help=(
             "Which prediction feature to fit. 'margin' = Phase 2a from scratch; "
-            "'recent_form' = Phase 2b on top of already-fit margin weights."
+            "'recent_form' = Phase 2b on top of already-fit margin weights; "
+            "'hfa' = Phase 2c per-sport home-field advantage on top of "
+            "already-fit margin weights."
         ),
     )
     p_fit.add_argument(
