@@ -99,6 +99,15 @@ export default function Navbar() {
                 >
                   {user.first_name || user.email}
                 </Link>
+                {user.is_admin && (
+                  <Link
+                    href="/admin/replay"
+                    className="rounded px-2 py-1.5 text-xs font-medium text-steel-gray/70 hover:text-crimson transition-colors"
+                    title="Admin: Replay QA"
+                  >
+                    Replay
+                  </Link>
+                )}
                 <button
                   onClick={logout}
                   className="rounded px-3 py-1.5 text-sm font-medium text-steel-gray hover:text-crimson transition-colors"
@@ -192,6 +201,15 @@ export default function Navbar() {
                 >
                   {user.first_name || user.email}
                 </Link>
+                {user.is_admin && (
+                  <Link
+                    href="/admin/replay"
+                    className="block rounded px-3 py-2 text-sm text-steel-gray hover:text-crimson hover:bg-crimson/10"
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    Admin · Replay QA
+                  </Link>
+                )}
                 <button
                   onClick={() => { logout(); setMobileOpen(false); }}
                   className="block w-full text-left rounded px-3 py-2 text-sm text-steel-gray hover:text-crimson hover:bg-crimson/10"

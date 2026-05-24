@@ -213,6 +213,7 @@ class User(Base):
     subscription_expires = Column(DateTime)
     stripe_customer_id = Column(String(100))
     push_token = Column(String(500))
+    is_admin = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now())
 
@@ -298,3 +299,24 @@ class PickemBadge(Base):
 
     user = relationship("User")
     contest = relationship("PickemContest")
+
+
+class ReplayTesterSession(Base):
+    __tablename__ = "replay_tester_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    sport_id = Column(Integer, ForeignKey("sports.id"))
+    season_year = Column(Integer, nullable=False)
+    week_number = Column(Integer, nullable=False)
+    task_text = Column(Text, nullable=False)
+    task_completed = Column(Boolean, nullable=False, default=False)
+    time_to_complete_seconds = Column(Integer)
+    bug_found = Column(Boolean, nullable=False, default=False)
+    bug_severity = Column(Integer)
+    feature_gap_text = Column(Text)
+    screenshot_url = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
+    sport = relationship("Sport")

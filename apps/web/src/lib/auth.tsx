@@ -11,6 +11,7 @@ interface User {
   last_name: string | null;
   subscription_tier: string;
   subscription_expires: string | null;
+  is_admin?: boolean;
 }
 
 interface AuthContextType {
@@ -47,7 +48,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        setUser(await res.json());
+        const data = await res.json();
+        setUser({ ...data, is_admin: data.is_admin ?? false });
       } else {
         localStorage.removeItem("preprank_token");
         localStorage.removeItem("preprank_refresh");

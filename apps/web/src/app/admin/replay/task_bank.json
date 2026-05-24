@@ -1,0 +1,14 @@
+[
+  { "id": "g1", "scope": "general", "text": "Find next week's hardest game for St. Paul's." },
+  { "id": "g2", "scope": "general", "text": "Which 3 teams are most at risk of missing playoffs?" },
+  { "id": "g3", "scope": "general", "text": "Pick the top-ranked team in this division and explain — from the screen — why they're #1." },
+  { "id": "g4", "scope": "general", "text": "Find a team whose ranking changed the most from last week to this week and identify the game that caused it." },
+  { "id": "f1", "scope": "football", "text": "Identify the upset most likely to happen this week in Division I football." },
+  { "id": "f2", "scope": "football", "text": "Find the football team with the strongest strength-of-schedule and name their next opponent." },
+  { "id": "f3", "scope": "football", "text": "Which Division II football team has the most realistic championship path? Justify using only what's on screen." },
+  { "id": "bb1", "scope": "boys-basketball", "text": "Find the highest-ranked boys basketball team that has lost to a team ranked outside the top 16." },
+  { "id": "gb1", "scope": "girls-basketball", "text": "Identify the girls basketball team with the most playoff-deciding game this week." },
+  { "id": "bs1", "scope": "baseball", "text": "Find the baseball team most likely to drop out of playoff position based on next week's schedule." },
+  { "id": "sb1", "scope": "softball", "text": "Identify the softball team whose power rating diverges most from the eye test, based on this week's results." },
+  { "id": "vb1", "scope": "volleyball", "text": "Find the volleyball team with the biggest week-over-week jump in rating and identify the game that drove it." }
+]

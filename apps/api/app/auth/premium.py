@@ -34,3 +34,10 @@ def get_premium_or_preview(
     if _is_premium(current_user):
         return {"user": current_user, "is_premium": True, "preview_allowed": True}
     return {"user": current_user, "is_premium": False, "preview_allowed": True}
+
+
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Gate endpoints to admin users. Returns 404 (not 403) to hide existence."""
+    if not getattr(current_user, "is_admin", False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return current_user
