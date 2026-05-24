@@ -17,6 +17,10 @@ from .recent_form import (
     precompute_team_week_form,
     team_form_signal,
 )
+from .sos_depth import (
+    precompute_depth_sos_signal,
+    team_opponents_through_week,
+)
 
 __all__ = [
     "capped_margin",
@@ -25,4 +29,6 @@ __all__ = [
     "game_recency_weight",
     "team_form_signal",
     "precompute_team_week_form",
+    "team_opponents_through_week",
+    "precompute_depth_sos_signal",
 ]

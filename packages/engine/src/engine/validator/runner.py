@@ -27,6 +27,7 @@ from typing import Any
 from engine.prediction.config import PredictionConfig
 from engine.prediction.features.margin import precompute_team_week_margins
 from engine.prediction.features.recent_form import precompute_team_week_form
+from engine.prediction.features.sos_depth import precompute_depth_sos_signal
 
 from .data import (
     ALL_SPORTS,
@@ -231,6 +232,7 @@ def _resolve_pregame_rating(
 def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[PredictionRecord]:
     margin_enabled = "margin" in config.enabled_features
     form_enabled = "recent_form" in config.enabled_features
+    sos_depth_enabled = "sos_depth" in config.enabled_features
     margin_table: dict[tuple[int, int], float] = (
         precompute_team_week_margins(inputs.games, inputs.sport_name, config)
         if margin_enabled
@@ -239,6 +241,13 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
     form_table: dict[tuple[int, int], float] = (
         precompute_team_week_form(inputs.games, inputs.sport_name, config)
         if form_enabled
+        else {}
+    )
+    sos_depth_table: dict[tuple[int, int], float] = (
+        precompute_depth_sos_signal(
+            inputs.games, inputs.engine_ratings, inputs.sport_name, config,
+        )
+        if sos_depth_enabled
         else {}
     )
 
@@ -263,6 +272,12 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
         a_margin = margin_table.get((a_team, w - 1), 0.0) if margin_enabled else 0.0
         h_form = form_table.get((h_team, w - 1), 0.0) if form_enabled else 0.0
         a_form = form_table.get((a_team, w - 1), 0.0) if form_enabled else 0.0
+        h_sos = (
+            sos_depth_table.get((h_team, w - 1), 0.0) if sos_depth_enabled else 0.0
+        )
+        a_sos = (
+            sos_depth_table.get((a_team, w - 1), 0.0) if sos_depth_enabled else 0.0
+        )
 
         p_home = predict_game(
             h_rating, a_rating, inputs.sport_name, config,
@@ -270,6 +285,8 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
             away_margin_signal=a_margin,
             home_form_signal=h_form,
             away_form_signal=a_form,
+            home_sos_depth_signal=h_sos,
+            away_sos_depth_signal=a_sos,
         )
 
         hs = g.get("home_score")

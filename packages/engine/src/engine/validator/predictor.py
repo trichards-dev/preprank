@@ -46,10 +46,12 @@ def predict_game(
     away_margin_signal: float = 0.0,
     home_form_signal: float = 0.0,
     away_form_signal: float = 0.0,
+    home_sos_depth_signal: float = 0.0,
+    away_sos_depth_signal: float = 0.0,
 ) -> float:
     """Return P(home_team wins) given pre-game ratings.
 
-    Pure function over :func:`win_probability_v2`. Two prediction-layer
+    Pure function over :func:`win_probability_v2`. Three prediction-layer
     signals can shift each side's effective rating before the matchup is
     fed to ``win_probability_v2``:
 
@@ -61,10 +63,14 @@ def predict_game(
       the per-sport weight from ``config.form_weight_by_sport`` (falling
       back to ``config.form_weight``) is applied to each side's pre-game
       recency-weighted form signal.
+    * ``sos_depth`` (Phase 2d): when ``'sos_depth' in config.enabled_features``,
+      the per-sport weight from ``config.sos_depth_weight_by_sport``
+      (falling back to ``config.sos_depth_weight``) is applied to each
+      side's pre-game depth-2-minus-depth-1 opponent-strength signal.
 
-    When neither feature is enabled, both signals are ignored and the
-    call collapses to the legacy ``win_probability_v2`` path —
-    guaranteeing zero behavior change for baseline runs. When both are
+    When no feature is enabled, all signals are ignored and the call
+    collapses to the legacy ``win_probability_v2`` path — guaranteeing
+    zero behavior change for baseline runs. When multiple features are
     enabled the contributions are additive.
     """
     home_eff = home_rating
@@ -79,5 +85,10 @@ def predict_game(
         fw = config.form_weight_by_sport.get(sport, config.form_weight)
         home_eff += fw * home_form_signal
         away_eff += fw * away_form_signal
+
+    if "sos_depth" in config.enabled_features:
+        sw = config.sos_depth_weight_by_sport.get(sport, config.sos_depth_weight)
+        home_eff += sw * home_sos_depth_signal
+        away_eff += sw * away_sos_depth_signal
 
     return win_probability_v2(home_eff, away_eff, config, sport=sport)

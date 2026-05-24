@@ -70,6 +70,12 @@ class PredictionConfig(BaseModel):
     sos_depth: int = 1
     """SOS recursion depth. LHSAA's own formula uses depth=1 (opponents' win pct only)."""
 
+    sos_depth_weight_by_sport: dict[str, float] = Field(default_factory=dict)
+    """Per-sport weight on the depth-2 SOS adjustment signal."""
+
+    sos_depth_weight: float = 0.0
+    """Default weight on the SOS depth signal. 0.0 = feature disabled."""
+
     @classmethod
     def baseline(cls) -> "PredictionConfig":
         """Explicit baseline config = current engine behavior."""

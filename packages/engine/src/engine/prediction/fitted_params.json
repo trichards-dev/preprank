@@ -10,5 +10,6 @@
     "Girls Soccer": 5.0,
     "Softball": 0.5,
     "Volleyball": 1.5
-  }
+  },
+  "sos_depth_weight_by_sport": {}
 }
