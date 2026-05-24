@@ -28,6 +28,7 @@ from engine.prediction.config import PredictionConfig
 from engine.prediction.features.margin import precompute_team_week_margins
 from engine.prediction.features.recent_form import precompute_team_week_form
 from engine.prediction.features.sos_depth import precompute_depth_sos_signal
+from engine.prediction.features.totals import precompute_team_week_totals
 
 from .data import (
     ALL_SPORTS,
@@ -233,6 +234,7 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
     margin_enabled = "margin" in config.enabled_features
     form_enabled = "recent_form" in config.enabled_features
     sos_depth_enabled = "sos_depth" in config.enabled_features
+    totals_enabled = "totals" in config.enabled_features
     margin_table: dict[tuple[int, int], float] = (
         precompute_team_week_margins(inputs.games, inputs.sport_name, config)
         if margin_enabled
@@ -248,6 +250,11 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
             inputs.games, inputs.engine_ratings, inputs.sport_name, config,
         )
         if sos_depth_enabled
+        else {}
+    )
+    totals_table: dict[tuple[int, int], tuple[float, float]] = (
+        precompute_team_week_totals(inputs.games)
+        if totals_enabled
         else {}
     )
 
@@ -278,6 +285,11 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
         a_sos = (
             sos_depth_table.get((a_team, w - 1), 0.0) if sos_depth_enabled else 0.0
         )
+        if totals_enabled:
+            h_off, h_def = totals_table.get((h_team, w - 1), (0.0, 0.0))
+            a_off, a_def = totals_table.get((a_team, w - 1), (0.0, 0.0))
+        else:
+            h_off = h_def = a_off = a_def = 0.0
 
         p_home = predict_game(
             h_rating, a_rating, inputs.sport_name, config,
@@ -287,6 +299,10 @@ def _predict_inputs(inputs: RunInputs, config: PredictionConfig) -> list[Predict
             away_form_signal=a_form,
             home_sos_depth_signal=h_sos,
             away_sos_depth_signal=a_sos,
+            home_off=h_off,
+            home_def=h_def,
+            away_off=a_off,
+            away_def=a_def,
         )
 
         hs = g.get("home_score")

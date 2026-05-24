@@ -21,6 +21,10 @@ from .sos_depth import (
     precompute_depth_sos_signal,
     team_opponents_through_week,
 )
+from .totals import (
+    precompute_team_week_totals,
+    team_offense_defense,
+)
 
 __all__ = [
     "capped_margin",
@@ -31,4 +35,6 @@ __all__ = [
     "precompute_team_week_form",
     "team_opponents_through_week",
     "precompute_depth_sos_signal",
+    "team_offense_defense",
+    "precompute_team_week_totals",
 ]

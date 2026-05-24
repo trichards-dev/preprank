@@ -1,6 +1,4 @@
 {
-  "form_weight_by_sport": {},
-  "home_advantage_by_sport": {},
   "margin_weight_by_sport": {
     "Baseball": 0.5,
     "Boys Basketball": 1.0,
@@ -11,5 +9,14 @@
     "Softball": 0.5,
     "Volleyball": 1.5
   },
-  "sos_depth_weight_by_sport": {}
+  "totals_weight_by_sport": {
+    "Baseball": 0.05,
+    "Boys Basketball": 0.1,
+    "Boys Soccer": 0.1,
+    "Football": 0.2,
+    "Girls Basketball": 0.3,
+    "Girls Soccer": 0.05,
+    "Softball": 0.05,
+    "Volleyball": 0.05
+  }
 }

@@ -48,10 +48,14 @@ def predict_game(
     away_form_signal: float = 0.0,
     home_sos_depth_signal: float = 0.0,
     away_sos_depth_signal: float = 0.0,
+    home_off: float = 0.0,
+    home_def: float = 0.0,
+    away_off: float = 0.0,
+    away_def: float = 0.0,
 ) -> float:
     """Return P(home_team wins) given pre-game ratings.
 
-    Pure function over :func:`win_probability_v2`. Three prediction-layer
+    Pure function over :func:`win_probability_v2`. Four prediction-layer
     signals can shift each side's effective rating before the matchup is
     fed to ``win_probability_v2``:
 
@@ -67,6 +71,14 @@ def predict_game(
       the per-sport weight from ``config.sos_depth_weight_by_sport``
       (falling back to ``config.sos_depth_weight``) is applied to each
       side's pre-game depth-2-minus-depth-1 opponent-strength signal.
+    * ``totals`` (Phase 2e): when ``'totals' in config.enabled_features``,
+      the per-sport weight from ``config.totals_weight_by_sport``
+      (falling back to ``config.totals_weight``) is applied to each
+      side's matchup-specific offense-minus-opponent-defense differential:
+      ``home_signal = home_off - away_def`` and
+      ``away_signal = away_off - home_def``. The four ``home_off`` /
+      ``home_def`` / ``away_off`` / ``away_def`` arguments are the team
+      season-to-date means of points scored and points allowed (uncapped).
 
     When no feature is enabled, all signals are ignored and the call
     collapses to the legacy ``win_probability_v2`` path — guaranteeing
@@ -90,5 +102,12 @@ def predict_game(
         sw = config.sos_depth_weight_by_sport.get(sport, config.sos_depth_weight)
         home_eff += sw * home_sos_depth_signal
         away_eff += sw * away_sos_depth_signal
+
+    if "totals" in config.enabled_features:
+        tw = config.totals_weight_by_sport.get(sport, config.totals_weight)
+        home_signal = home_off - away_def
+        away_signal = away_off - home_def
+        home_eff += tw * home_signal
+        away_eff += tw * away_signal
 
     return win_probability_v2(home_eff, away_eff, config, sport=sport)

@@ -42,6 +42,13 @@ DEFAULT_HFA_GRID: list[float] = [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 # Phase 2a since both signals live in rating-point units.
 DEFAULT_SOS_DEPTH_WEIGHT_GRID: list[float] = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
 
+# Default grid for the Phase-2e points-totals weight. SMALLER scale than
+# the margin grid because raw points (football scores 0-50, basketball
+# 30-80) are much larger numbers than the capped margins (clip at 35 for
+# football, 25 for basketball). A weight of 0.05 means a team scoring 7
+# more points than opponents allow contributes ~0.35 rating points.
+DEFAULT_TOTALS_WEIGHT_GRID: list[float] = [0.05, 0.1, 0.2, 0.3, 0.5, 1.0]
+
 # Phase-2a fitted-parameter file. Lives inside the package so CLI consumers
 # pick it up without extra config wiring.
 FITTED_PARAMS_PATH: Path = (
@@ -73,18 +80,21 @@ def _build_config_for_label(label: str) -> PredictionConfig:
     the logistic primitive, not a separately toggleable signal.)
     ``phase-2d`` -> margin + depth-2 SOS adjustment, both with per-sport
     weights loaded from ``fitted_params.json``.
+    ``phase-2e`` -> margin + uncapped scoring-totals signal, both with
+    per-sport weights loaded from ``fitted_params.json``.
 
-    Prior phases explicitly pin ``home_advantage_by_sport={}`` and
-    ``sos_depth_weight_by_sport={}`` so they remain numerically
-    identical to their previously-published runs even after later
-    phases populate ``fitted_params.json``.
+    Prior phases explicitly pin ``home_advantage_by_sport={}``,
+    ``sos_depth_weight_by_sport={}``, and ``totals_weight_by_sport={}``
+    so they remain numerically identical to their previously-published
+    runs even after later phases populate ``fitted_params.json``.
     """
     if label == "baseline":
-        # Pin HFA + SOS-depth maps empty so a later fit-and-write does
-        # not silently change baseline numbers.
+        # Pin HFA + SOS-depth + totals maps empty so a later fit-and-
+        # write does not silently change baseline numbers.
         return PredictionConfig(
             home_advantage_by_sport={},
             sos_depth_weight_by_sport={},
+            totals_weight_by_sport={},
         )
     if label == "phase-2a":
         fitted = _load_fitted_params()
@@ -94,11 +104,12 @@ def _build_config_for_label(label: str) -> PredictionConfig:
             margin_weight_by_sport={
                 str(k): float(v) for k, v in margin_weight_by_sport.items()
             },
-            # Pin HFA + SOS-depth maps empty so phase-2a stays
-            # numerically identical even after Phase 2c/2d write
+            # Pin HFA + SOS-depth + totals maps empty so phase-2a stays
+            # numerically identical even after later phases write
             # per-sport entries to fitted_params.json.
             home_advantage_by_sport={},
             sos_depth_weight_by_sport={},
+            totals_weight_by_sport={},
         )
     if label == "phase-2b":
         fitted = _load_fitted_params()
@@ -113,6 +124,7 @@ def _build_config_for_label(label: str) -> PredictionConfig:
                 str(k): float(v) for k, v in form_weight_by_sport.items()
             },
             sos_depth_weight_by_sport={},
+            totals_weight_by_sport={},
         )
     if label == "phase-2c":
         fitted = _load_fitted_params()
@@ -128,6 +140,7 @@ def _build_config_for_label(label: str) -> PredictionConfig:
                 str(k): float(v) for k, v in home_advantage_by_sport.items()
             },
             sos_depth_weight_by_sport={},
+            totals_weight_by_sport={},
         )
     if label == "phase-2d":
         fitted = _load_fitted_params()
@@ -142,6 +155,23 @@ def _build_config_for_label(label: str) -> PredictionConfig:
             },
             sos_depth_weight_by_sport={
                 str(k): float(v) for k, v in sos_depth_weight_by_sport.items()
+            },
+            totals_weight_by_sport={},
+        )
+    if label == "phase-2e":
+        fitted = _load_fitted_params()
+        margin_weight_by_sport = fitted.get("margin_weight_by_sport", {}) or {}
+        totals_weight_by_sport = fitted.get("totals_weight_by_sport", {}) or {}
+        return PredictionConfig(
+            # recent_form was rejected in Phase 2b; HFA + sos_depth are
+            # measured separately. Phase 2e is the additive lift of
+            # uncapped scoring totals on top of capped margin.
+            enabled_features=["margin", "totals"],
+            margin_weight_by_sport={
+                str(k): float(v) for k, v in margin_weight_by_sport.items()
+            },
+            totals_weight_by_sport={
+                str(k): float(v) for k, v in totals_weight_by_sport.items()
             },
         )
     return PredictionConfig()
@@ -242,11 +272,18 @@ def _cmd_fit(args: argparse.Namespace) -> int:
     ``--feature sos_depth`` is Phase 2d: fit per-sport weight on the
     depth-2 SOS adjustment signal on top of already-fit
     ``margin_weight_by_sport``. recent_form stays OFF.
+
+    ``--feature totals`` is Phase 2e: fit per-sport weight on the
+    uncapped points-totals matchup signal (offensive_strength -
+    opponent_defensive_weakness) on top of already-fit
+    ``margin_weight_by_sport``. recent_form stays OFF; HFA + sos_depth
+    are left at their defaults so the lift attributable to totals is
+    isolated.
     """
-    if args.feature not in {"margin", "recent_form", "hfa", "sos_depth"}:
+    if args.feature not in {"margin", "recent_form", "hfa", "sos_depth", "totals"}:
         print(
             f"Unknown --feature {args.feature!r}; expected 'margin', "
-            f"'recent_form', 'hfa', or 'sos_depth'.",
+            f"'recent_form', 'hfa', 'sos_depth', or 'totals'.",
             file=sys.stderr,
         )
         return 2
@@ -261,8 +298,10 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         default_grid = DEFAULT_FORM_WEIGHT_GRID
     elif args.feature == "hfa":
         default_grid = DEFAULT_HFA_GRID
-    else:  # sos_depth
+    elif args.feature == "sos_depth":
         default_grid = DEFAULT_SOS_DEPTH_WEIGHT_GRID
+    else:  # totals
+        default_grid = DEFAULT_TOTALS_WEIGHT_GRID
     grid = _parse_grid(args.grid) if args.grid else list(default_grid)
 
     # Build a fresh Supabase client per fit iteration so the HTTP/2 stream
@@ -298,6 +337,10 @@ def _cmd_fit(args: argparse.Namespace) -> int:
     existing_sos_depth_w = {
         str(k): float(v)
         for k, v in (existing.get("sos_depth_weight_by_sport") or {}).items()
+    }
+    existing_totals_w = {
+        str(k): float(v)
+        for k, v in (existing.get("totals_weight_by_sport") or {}).items()
     }
 
     fitted: dict[str, float] = {}
@@ -350,7 +393,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
                     home_advantage_by_sport={sport: float(w)},
                 )
                 label = f"fit-hfa-{sport}-{w}"
-            else:  # sos_depth
+            elif args.feature == "sos_depth":
                 # Phase 2d: fit per-sport depth-2 SOS adjustment weight
                 # on top of fitted margin. recent_form stays OFF
                 # (rejected in 2b); HFA stays at its global default for
@@ -369,6 +412,25 @@ def _cmd_fit(args: argparse.Namespace) -> int:
                     sos_depth_weight_by_sport={sport: float(w)},
                 )
                 label = f"fit-sos-depth-{sport}-{w}"
+            else:  # totals
+                # Phase 2e: fit per-sport totals weight on top of
+                # fitted margin. recent_form stays OFF (rejected in
+                # 2b); HFA + sos_depth stay at their defaults so the
+                # totals lift is isolated.
+                margin_w = existing_margin_w.get(sport)
+                if margin_w is None:
+                    print(
+                        f"  {sport:<18} skipped (no fitted margin_weight; run "
+                        f"`fit --feature margin` first)",
+                        file=sys.stderr,
+                    )
+                    break
+                cfg = PredictionConfig(
+                    enabled_features=["margin", "totals"],
+                    margin_weight_by_sport={sport: float(margin_w)},
+                    totals_weight_by_sport={sport: float(w)},
+                )
+                label = f"fit-totals-{sport}-{w}"
             result = run_validation(
                 config=cfg,
                 config_label=label,
@@ -400,6 +462,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             "form_weight_by_sport": existing_form_w,
             "home_advantage_by_sport": existing_hfa,
             "sos_depth_weight_by_sport": existing_sos_depth_w,
+            "totals_weight_by_sport": existing_totals_w,
         }
     elif args.feature == "recent_form":
         payload = {
@@ -407,6 +470,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             "form_weight_by_sport": fitted,
             "home_advantage_by_sport": existing_hfa,
             "sos_depth_weight_by_sport": existing_sos_depth_w,
+            "totals_weight_by_sport": existing_totals_w,
         }
     elif args.feature == "hfa":
         payload = {
@@ -414,13 +478,23 @@ def _cmd_fit(args: argparse.Namespace) -> int:
             "form_weight_by_sport": existing_form_w,
             "home_advantage_by_sport": fitted,
             "sos_depth_weight_by_sport": existing_sos_depth_w,
+            "totals_weight_by_sport": existing_totals_w,
         }
-    else:  # sos_depth
+    elif args.feature == "sos_depth":
         payload = {
             "margin_weight_by_sport": existing_margin_w,
             "form_weight_by_sport": existing_form_w,
             "home_advantage_by_sport": existing_hfa,
             "sos_depth_weight_by_sport": fitted,
+            "totals_weight_by_sport": existing_totals_w,
+        }
+    else:  # totals
+        payload = {
+            "margin_weight_by_sport": existing_margin_w,
+            "form_weight_by_sport": existing_form_w,
+            "home_advantage_by_sport": existing_hfa,
+            "sos_depth_weight_by_sport": existing_sos_depth_w,
+            "totals_weight_by_sport": fitted,
         }
     # Drop empty maps for cleanliness.
     payload = {k: v for k, v in payload.items() if v}
@@ -491,14 +565,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_fit.add_argument(
         "--feature",
         required=True,
-        choices=["margin", "recent_form", "hfa", "sos_depth"],
+        choices=["margin", "recent_form", "hfa", "sos_depth", "totals"],
         help=(
             "Which prediction feature to fit. 'margin' = Phase 2a from scratch; "
             "'recent_form' = Phase 2b on top of already-fit margin weights; "
             "'hfa' = Phase 2c per-sport home-field advantage on top of "
             "already-fit margin weights; 'sos_depth' = Phase 2d per-sport "
             "depth-2 SOS adjustment weight on top of already-fit margin "
-            "weights."
+            "weights; 'totals' = Phase 2e per-sport uncapped scoring-totals "
+            "weight on top of already-fit margin weights."
         ),
     )
     p_fit.add_argument(

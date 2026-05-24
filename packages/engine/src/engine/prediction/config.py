@@ -76,6 +76,16 @@ class PredictionConfig(BaseModel):
     sos_depth_weight: float = 0.0
     """Default weight on the SOS depth signal. 0.0 = feature disabled."""
 
+    # --- Phase 2e: scoring offense / scoring defense totals ---
+    totals_weight_by_sport: dict[str, float] = Field(default_factory=dict)
+    """Per-sport weight on the uncapped points-totals matchup signal
+    (offense_strength - opponent_defense_weakness). Empty default = use
+    ``totals_weight``."""
+
+    totals_weight: float = 0.0
+    """Default weight on the points-totals signal. 0.0 = feature disabled
+    even if 'totals' is in ``enabled_features``."""
+
     @classmethod
     def baseline(cls) -> "PredictionConfig":
         """Explicit baseline config = current engine behavior."""
