@@ -290,7 +290,7 @@ def main():
     check_asyncpg(diff, files, r)
     check_archive_patterns(diff, files, r)
     check_web_api_contract(files, r)
-    check_port_references(diff, r)
+    check_port_references(diff, files, r)
     check_secrets(diff, r)
     check_bcrypt_pin(diff, files, r)
     check_destructive_migrations(diff, files, r)
