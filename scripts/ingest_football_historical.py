@@ -194,9 +194,13 @@ def load_teams(sb, sport_id: int) -> dict[tuple[int, int], int]:
 
 
 def get_or_create_team(sb, school_id: int, sport_id: int, season_year: int,
-                       division: str, select_status: str,
+                       division: str | None, select_status: str | None,
                        team_cache: dict, dry_run: bool) -> int | None:
-    """Return team_id, creating a new team record if needed."""
+    """Return team_id, creating a new team record if needed.
+
+    2026-05-25: NEVER writes division/select_status during scrape — those
+    are owned by scripts/refresh_team_divisions.py.
+    """
     key = (school_id, season_year)
     if key in team_cache:
         return team_cache[key]
@@ -206,13 +210,17 @@ def get_or_create_team(sb, school_id: int, sport_id: int, season_year: int,
               f"sport_id={sport_id} year={season_year} div={division} sel={select_status}")
         return None
 
-    res = sb.table("teams").insert({
+    payload = {
         "school_id": school_id,
         "sport_id": sport_id,
         "season_year": season_year,
-        "division": division,
-        "select_status": select_status,
-    }).execute()
+    }
+    if division is not None:
+        payload["division"] = division
+    if select_status is not None:
+        payload["select_status"] = select_status
+
+    res = sb.table("teams").insert(payload).execute()
     if res.data:
         tid = res.data[0]["id"]
         team_cache[key] = tid
@@ -281,7 +289,10 @@ def calculate_and_store_ratings(sb, sport_id: int, season_year: int,
         team_records[tid] = TeamRecord(
             team_id=tid,
             school_name=sch.get("name", f"school_{sid}"),
-            division=tinfo.get("division") or CLASS_TO_DIV.get(sch.get("classification", "5A"), "I"),
+            # 2026-05-25: division comes from refresh_team_divisions.py.
+            # Engine bracketing falls back to "I" when uncovered — does NOT
+            # write back to DB.
+            division=tinfo.get("division") or "I",
             classification=sch.get("classification", "5A"),
             wins=0,
             losses=0,
@@ -429,24 +440,20 @@ def run(seasons: list[int], dry_run: bool, skip_ratings: bool):
                 # Determine home/away school
                 if is_home:
                     home_school_id, away_school_id = school_id, opp_id
-                    home_class = row["class_"]
-                    away_class = row["class_"]  # lhsaaonline only shows reporter's class
                 else:
                     home_school_id, away_school_id = opp_id, school_id
-                    home_class = row["class_"]
-                    away_class = row["class_"]
 
-                home_div = CLASS_TO_DIV.get(home_class, "I")
-                away_div = CLASS_TO_DIV.get(away_class, "I")
-
-                # Get or create team records for this season
+                # 2026-05-25: stopped passing division/select_status from
+                # scraper. CLASS_TO_DIV + away_class=row["class_"] caused
+                # the phantom Div V across 2022-2024. teams.division now
+                # comes from refresh_team_divisions.py (PDF source of truth).
                 home_team_id = get_or_create_team(
                     sb, home_school_id, FOOTBALL_SPORT_ID, season_year,
-                    home_div, "Non-Select", team_cache, dry_run
+                    None, None, team_cache, dry_run
                 )
                 away_team_id = get_or_create_team(
                     sb, away_school_id, FOOTBALL_SPORT_ID, season_year,
-                    away_div, "Non-Select", team_cache, dry_run
+                    None, None, team_cache, dry_run
                 )
 
                 if home_team_id is None or away_team_id is None:

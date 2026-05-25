@@ -41,6 +41,31 @@ DIVISION_NUM_RE = re.compile(r"\bDivision\s+(\d)\b", re.IGNORECASE)
 DIVISION_CLASS_RE = re.compile(r"\bClass\s+([1-5]A|B|C)\b", re.IGNORECASE)
 NUM_TO_ROMAN = {"1": "I", "2": "II", "3": "III", "4": "IV", "5": "V"}
 
+# Bare-marker patterns used by multi-page PDFs that place "I" / "II" / "5A"
+# alone in the first cell of a section's first row (no "Division" / "Class"
+# prefix). Caller must be confident the matched string is actually a section
+# marker — use only when the cell content is short and not numeric data.
+_BARE_DIVISION_ROMAN_RE = re.compile(r"^\s*(IV|V|III|II|I)\s*$", re.IGNORECASE)
+_BARE_DIVISION_CLASS_RE = re.compile(r"^\s*([1-5]A|B|C)\s*$", re.IGNORECASE)
+
+
+def detect_bare_marker(s: str | None) -> str | None:
+    """Return a normalized division (Roman) if `s` is a bare section marker.
+
+    Handles `I/II/III/IV/V` Romans and `5A/4A/3A/2A/1A/B/C` class labels —
+    the latter normalize via CLASS_TO_DIV at call time (caller decides).
+    Returns None for non-marker strings.
+    """
+    if not s:
+        return None
+    m = _BARE_DIVISION_ROMAN_RE.match(s)
+    if m:
+        return m.group(1).upper()
+    m = _BARE_DIVISION_CLASS_RE.match(s)
+    if m:
+        return m.group(1).upper()
+    return None
+
 # Date in the index "snapshot" field — examples: "10/30/2023 Final", "2/9/2024", "Final", "Week 10 Final"
 SNAPSHOT_DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
 
@@ -245,10 +270,69 @@ def _extract_via_pdfplumber(pdf_path: Path, entry: dict) -> list[ParsedPowerRati
                 if school_idx is None or pr_idx is None:
                     continue
 
+                # Multi-division single-page PDFs (e.g., 2021 Football "Final
+                # Division Seeding Report") have sub-headers like "Division II"
+                # embedded as separate rows inside the same table, with that
+                # division's teams following until the next sub-header. Track
+                # the current division as we iterate so subsequent rows get
+                # the right (division, select_status) tag.
+                current_div = division
+                current_select = select_status
+
+                # Pre-scan the rows BEFORE data_start for a section marker
+                # (the bare-marker rows like ['5A', None, ...] live there).
+                # Without this, the marker would be silently skipped by
+                # _compose_header and current_div would stay at the page-text
+                # fallback ("I").
+                for raw in table[:data_start]:
+                    if not raw:
+                        continue
+                    cells = [(c or "").strip() for c in raw]
+                    joined = " ".join(c for c in cells if c)
+                    if joined:
+                        sub_d, sub_s = detect_header(joined)
+                        if sub_d:
+                            current_div = sub_d
+                        if sub_s:
+                            current_select = sub_s
+                        if not sub_d and cells:
+                            bare = detect_bare_marker(cells[0])
+                            if bare:
+                                CLASS_TO_DIV_INLINE = {
+                                    "5A": "I", "4A": "II", "3A": "III",
+                                    "2A": "IV", "1A": "V", "B": "V", "C": "V",
+                                }
+                                current_div = CLASS_TO_DIV_INLINE.get(bare, bare)
+
                 for raw in table[data_start:]:
                     if not raw:
                         continue
                     cells = [(c or "").strip() for c in raw]
+
+                    # Intra-table section-header detection. Two flavors:
+                    # (a) prefixed: "Division II" / "Class 4A" anywhere in the row
+                    # (b) bare marker: cell[0] alone is "II" or "5A" (LHSAA's
+                    #     2021-era PDFs use this format on each section's first row)
+                    joined = " ".join(c for c in cells if c)
+                    is_header_row = not (cells and cells[0].isdigit())
+                    if is_header_row and joined:
+                        sub_d, sub_s = detect_header(joined)
+                        if sub_d:
+                            current_div = sub_d
+                        if sub_s:
+                            current_select = sub_s
+                        # Bare-marker fallback when prefixed detection missed
+                        if not sub_d and cells:
+                            bare = detect_bare_marker(cells[0])
+                            if bare:
+                                # Normalize class labels to Roman per CLASS_TO_DIV
+                                # for consistency with the rest of the pipeline.
+                                CLASS_TO_DIV_INLINE = {
+                                    "5A": "I", "4A": "II", "3A": "III",
+                                    "2A": "IV", "1A": "V", "B": "V", "C": "V",
+                                }
+                                current_div = CLASS_TO_DIV_INLINE.get(bare, bare)
+
                     if rank_idx >= len(cells) or not cells[rank_idx].isdigit():
                         continue
                     if school_idx >= len(cells) or pr_idx >= len(cells):
@@ -286,8 +370,8 @@ def _extract_via_pdfplumber(pdf_path: Path, entry: dict) -> list[ParsedPowerRati
                         strength_factor=strength_factor,
                         wins=wins,
                         losses=losses,
-                        division=division,
-                        select_status=select_status,
+                        division=current_div,
+                        select_status=current_select,
                         season_year=season_year,
                         snapshot_date=snapshot_date,
                     ))

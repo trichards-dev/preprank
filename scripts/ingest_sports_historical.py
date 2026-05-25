@@ -50,6 +50,7 @@ class SportConfig:
     years: list[int]
     score_type: str     # "sets", "points", "runs", "goals"
     week_snapshot: int  # week_number to label the rating snapshot
+    score_format: str = "perspective"  # "perspective" (default) or "winner_first"
 
     @property
     def form_url(self) -> str:
@@ -65,6 +66,11 @@ class SportConfig:
         return self.filter_values[0] in ("I", "II", "III", "IV", "V")
 
 
+# DEPRECATED 2026-05-25: phantom Div V trace identified CLASS_TO_DIV as the
+# root cause of fleet-wide division mis-labelling. teams.division now comes
+# from LHSAA PDFs via scripts/refresh_team_divisions.py — NEVER inferred
+# from school classification. Kept only for the extract_division() function
+# below that's invoked by legacy callers; do not introduce new uses.
 CLASS_TO_DIV = {"5A": "I", "4A": "II", "3A": "III", "2A": "IV", "1A": "V", "B": "V", "C": "V"}
 
 SPORTS: dict[str, SportConfig] = {
@@ -107,6 +113,12 @@ SPORTS: dict[str, SportConfig] = {
         filter_values=["5A", "4A", "3A", "2A", "1A"],
         years=[2021, 2022, 2023, 2024, 2025],
         score_type="runs", week_snapshot=14,
+        # 2026-05-25: baseball page format is winner_first, not perspective.
+        # Phase 0 audit showed 87.6% home-win rate vs ~54% for other sports.
+        # Forensic analysis (see decisions.md 2026-05-24 entry) traced this
+        # to parse_scores treating "X-Y" as my_score-opp_score when LHSAA's
+        # baseball pages actually publish it as winner_score-loser_score.
+        score_format="winner_first",
     ),
     "softball": SportConfig(
         name="Softball", sport_id=12,
@@ -255,10 +267,21 @@ def _parse_date(raw: str) -> str | None:
     return None
 
 
-def parse_scores(score_str: str, wl: str, is_home: bool, score_type: str) -> tuple[int, int]:
+def parse_scores(
+    score_str: str,
+    wl: str,
+    is_home: bool,
+    score_type: str,
+    score_format: str = "perspective",
+) -> tuple[int, int]:
     """
     Returns (home_score, away_score) for the games table.
-    For power ratings we only need W/L, but we store actual scores where available.
+
+    score_format:
+      - "perspective" (default): lhsaaonline.org row's "X-Y" means my-opponent
+      - "winner_first": "X-Y" means winner-loser regardless of perspective
+        (baseball pages use this format per 2026-05-25 audit)
+
     Falls back to 1/0 encoding if parsing fails.
     """
     won = wl == "W"
@@ -285,19 +308,26 @@ def parse_scores(score_str: str, wl: str, is_home: bool, score_type: str) -> tup
                 return sets_opp, sets_me
 
     elif score_type in ("points", "runs", "goals"):
-        # Single "X-Y" score from my perspective
-        # Strip forfeit marker
+        # Single "X-Y" score (format depends on score_format flag)
         clean = score_str.replace("(f)", "").replace("(F)", "").strip()
         # Handle OT markers like "62-45 OT"
         clean = re.sub(r"\s*(OT|OT\d*)$", "", clean, flags=re.IGNORECASE).strip()
         parts = clean.split("-")
         if len(parts) == 2:
             try:
-                me, opp = int(parts[0]), int(parts[1])
-                if is_home:
-                    return me, opp
+                a, b = int(parts[0]), int(parts[1])
+                # Normalize to (my_score, opp_score) regardless of source format
+                if score_format == "winner_first":
+                    # "winner-loser" — assign by W/L not perspective
+                    my_score = a if won else b
+                    opp_score = b if won else a
                 else:
-                    return opp, me
+                    # "perspective" — already my-opp
+                    my_score, opp_score = a, b
+                if is_home:
+                    return my_score, opp_score
+                else:
+                    return opp_score, my_score
             except ValueError:
                 pass
 
@@ -351,20 +381,36 @@ def load_teams_for_sport(sb, sport_id: int) -> dict[tuple[int, int], int]:
 
 
 def get_or_create_team(sb, school_id: int, sport_id: int, season_year: int,
-                        division: str, select_status: str,
+                        division: str | None, select_status: str | None,
                         team_cache: dict, dry_run: bool) -> int | None:
+    """Return team_id, creating a new row when needed.
+
+    2026-05-25: NEVER writes division/select_status during scrape — those
+    are owned by scripts/refresh_team_divisions.py. New teams created here
+    will have NULL for both columns; the refresh script populates them
+    from LHSAA PDFs after the scrape.
+
+    Existing team in cache → return cached id without touching the row.
+    """
     key = (school_id, season_year)
     if key in team_cache:
         return team_cache[key]
 
     if dry_run:
-        return None  # Silently skip in dry-run
+        return None
 
-    res = sb.table("teams").insert({
+    payload = {
         "school_id": school_id, "sport_id": sport_id,
-        "season_year": season_year, "division": division,
-        "select_status": select_status,
-    }).execute()
+        "season_year": season_year,
+    }
+    # Only set division/select_status if explicitly provided (legacy callers).
+    # The 2026-05-25 ingest pipeline passes None for both.
+    if division is not None:
+        payload["division"] = division
+    if select_status is not None:
+        payload["select_status"] = select_status
+
+    res = sb.table("teams").insert(payload).execute()
     if res.data:
         tid = res.data[0]["id"]
         team_cache[key] = tid
@@ -427,7 +473,11 @@ def calculate_and_store_ratings(sb, cfg: SportConfig, season_year: int,
     for tid, ti in team_info.items():
         sid = ti["school_id"]
         sch = school_info.get(sid, {})
-        div = ti.get("division") or CLASS_TO_DIV.get(sch.get("classification", "5A"), "I")
+        # 2026-05-25: teams.division comes from refresh_team_divisions.py
+        # (PDFs as source of truth). Fall back to "I" only for engine
+        # bracketing when the team is uncovered by any PDF — does NOT
+        # write back to DB.
+        div = ti.get("division") or "I"
         team_records[tid] = TeamRecord(
             team_id=tid,
             school_name=sch.get("name", f"sid:{sid}"),
@@ -573,18 +623,24 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
                     home_div = extract_division(row["opp_dist_div"], cfg)
                     away_div = extract_division(row["dist_div"], cfg)
 
+                # 2026-05-25: stopped passing division/select_status from
+                # scraper data. teams.division is owned by
+                # scripts/refresh_team_divisions.py (PDFs as source of truth).
+                # New teams created here get NULL; existing teams keep their
+                # PDF-derived values via the cache hit.
                 home_team_id = get_or_create_team(
                     sb, home_school_id, cfg.sport_id, season_year,
-                    home_div, "Non-Select", team_cache, dry_run)
+                    None, None, team_cache, dry_run)
                 away_team_id = get_or_create_team(
                     sb, away_school_id, cfg.sport_id, season_year,
-                    away_div, "Non-Select", team_cache, dry_run)
+                    None, None, team_cache, dry_run)
 
                 if home_team_id is None or away_team_id is None:
                     continue
 
                 home_score, away_score = parse_scores(
-                    row["score"], row["wl"], is_home, cfg.score_type)
+                    row["score"], row["wl"], is_home, cfg.score_type,
+                    score_format=cfg.score_format)
 
                 games_to_insert.append({
                     "home_team_id": home_team_id,

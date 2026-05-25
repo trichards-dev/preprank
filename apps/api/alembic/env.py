@@ -1,10 +1,16 @@
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+# Load apps/api/.env so DATABASE_URL (Supabase pooler DSN) is available
+# regardless of how the user invoked alembic.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
