@@ -24,6 +24,12 @@ from difflib import SequenceMatcher
 import httpx
 from bs4 import BeautifulSoup
 
+# Allow "scripts.oos_helper" import when running this file directly (not as a module).
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from scripts.oos_helper import detect_oos_state, get_or_create_oos_school
+
 # ---------------------------------------------------------------------------
 # Supabase config
 # ---------------------------------------------------------------------------
@@ -565,6 +571,14 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
     print(f"  Existing team records: {len(team_cache)}")
 
     unmatched: set[str] = set()
+    # OOS school cache keyed by opponent name; shared across all seasons so
+    # we don't double-insert the same OOS opponent. Pre-seeded with any
+    # existing OOS schools already in the DB (parish LIKE 'OOS%') so
+    # subsequent re-scrapes resolve to the same school_id.
+    oos_school_cache: dict[str, int] = {
+        s["name"]: s["id"]
+        for s in (sb.table("schools").select("id,name,parish").like("parish", "OOS%").execute().data or [])
+    }
     total_inserted = 0
 
     with httpx.Client(follow_redirects=True, timeout=60) as session:
@@ -609,9 +623,20 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
                 if school_id is None:
                     unmatched.add(school_name)
                     continue
+
+                # 2026-05-25 Path C fix: detect OOS opponents and create
+                # synthetic schools instead of dropping. See
+                # reports/data_audit/cat1_diagnostic/RESULTS.md.
+                opp_state_code: str | None = None
                 if opp_id is None:
-                    unmatched.add(opp_name)
-                    continue
+                    opp_state_code = detect_oos_state(opp_name)
+                    if opp_state_code:
+                        opp_id = get_or_create_oos_school(
+                            sb, opp_name, opp_state_code, oos_school_cache, dry_run
+                        )
+                    if opp_id is None:
+                        unmatched.add(opp_name)
+                        continue
 
                 is_home = row["home_away"] == "H"
                 if is_home:
@@ -655,7 +680,11 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
                     "is_district": row["is_district"],
                     "is_playoff": False,
                     "is_championship": False,
-                    "is_out_of_state": False,
+                    # 2026-05-25: true when the opponent was resolved via the
+                    # OOS-helper path (state suffix matched). Was hardcoded to
+                    # False, which along with the opp_id-None skip silently
+                    # dropped every OOS game from our DB.
+                    "is_out_of_state": opp_state_code is not None,
                     "source": "lhsaaonline",
                 })
 

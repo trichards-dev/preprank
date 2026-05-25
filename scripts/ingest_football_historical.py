@@ -24,6 +24,11 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 
+# Allow "scripts.oos_helper" import when running this file directly.
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from scripts.oos_helper import detect_oos_state, get_or_create_oos_school
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -389,7 +394,14 @@ def run(seasons: list[int], dry_run: bool, skip_ratings: bool):
         if r["name"] == "Football"
     )
     team_cache = load_teams(sb, FOOTBALL_SPORT_ID)
-    print(f"  {len(school_name_to_id)} schools, {len(team_cache)} existing team records")
+    # OOS school cache keyed by opponent name; shared across all seasons.
+    # Pre-seeded with any existing OOS schools (parish LIKE 'OOS%') from
+    # prior ingest runs so re-scrapes resolve to the same school_id.
+    oos_school_cache: dict[str, int] = {
+        s["name"]: s["id"]
+        for s in (sb.table("schools").select("id,name,parish").like("parish", "OOS%").execute().data or [])
+    }
+    print(f"  {len(school_name_to_id)} schools, {len(team_cache)} existing team records, {len(oos_school_cache)} OOS schools pre-cached")
 
     unmatched_schools: set[str] = set()
     total_inserted = 0
@@ -432,10 +444,20 @@ def run(seasons: list[int], dry_run: bool, skip_ratings: bool):
                     unmatched_schools.add(school_name)
                     continue
                 if opp_id is None:
-                    # Out-of-state or unknown opponent — skip game
-                    if not row["is_oos"]:
+                    if row["is_oos"]:
+                        # 2026-05-25 Path C fix: create synthetic OOS school
+                        # instead of dropping the game. See
+                        # reports/data_audit/cat1_diagnostic/RESULTS.md.
+                        state_code = detect_oos_state(opp_name)
+                        opp_id = get_or_create_oos_school(
+                            sb, opp_name, state_code, oos_school_cache, dry_run
+                        )
+                        if opp_id is None:
+                            unmatched_schools.add(opp_name)
+                            continue
+                    else:
                         unmatched_schools.add(opp_name)
-                    continue
+                        continue
 
                 # Determine home/away school
                 if is_home:
