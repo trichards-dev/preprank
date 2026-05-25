@@ -193,9 +193,27 @@ def load_schools(sb) -> dict[str, int]:
 
 
 def load_teams(sb, sport_id: int) -> dict[tuple[int, int], int]:
-    """(school_id, season_year) -> team_id"""
-    res = sb.table("teams").select("id,school_id,season_year").eq("sport_id", sport_id).execute()
-    return {(r["school_id"], r["season_year"]): r["id"] for r in res.data}
+    """(school_id, season_year) -> team_id.
+
+    Paginated — Football has ~1500 teams across 5 seasons, well past
+    PostgREST's 1000-row default. Without pagination the team_cache
+    silently misses entries and the scraper hits a unique-key violation
+    when it tries to re-INSERT.
+    """
+    out: dict[tuple[int, int], int] = {}
+    offset, page = 0, 1000
+    while True:
+        res = (sb.table("teams").select("id,school_id,season_year")
+               .eq("sport_id", sport_id)
+               .range(offset, offset + page - 1).execute())
+        if not res.data:
+            break
+        for r in res.data:
+            out[(r["school_id"], r["season_year"])] = r["id"]
+        if len(res.data) < page:
+            break
+        offset += page
+    return out
 
 
 def get_or_create_team(sb, school_id: int, sport_id: int, season_year: int,
