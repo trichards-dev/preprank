@@ -81,3 +81,13 @@ The `archive/pre-consolidation` branch holds a **divergent, retired** API implem
 ## Skills to use on this project
 
 - **`/software-design`** — the multi-agent design team (Product Manager, Solution Architect, DB Designer, Backend, Frontend, UX, Security, DevOps, QA, Claude AI Expert, Claude Code Expert). Invoke whenever this app needs a new architecture decision, a feature spec, a tech-stack/build-vs-buy evaluation, or a meaningful refactor that crosses multiple components. The 11 sub-agents run in parallel and produce a production-ready specification rather than a one-pass design. Don't reach for this for routine bug fixes or small changes — use it for the things that actually warrant the depth.
+
+- **`/preprank-code-review`** — **mandatory before every `git push`**. Runs a two-part review: (1) the mechanical checker at `.claude/skills/preprank-code-review/scripts/check_diff.py` (asyncpg prohibition, archive patterns, port references, web→API contract, secrets, bcrypt pin, destructive migrations, Vercel auto-deploy risk) and (2) an intelligent diff review covering scope integrity, simulation logic placement, and cross-cutting concerns. The git pre-push hook at `.git/hooks/pre-push` runs the mechanical checker automatically on every push and will block if violations are found — but the intelligent review requires invoking `/preprank-code-review` manually. Do not skip it. This applies to every session type: API, web, mobile, engine.
+
+## Pre-push checklist (every session)
+
+Before running `git push` on any branch:
+1. Run `/preprank-code-review` — get a written VERDICT before pushing
+2. If BLOCKED: fix the listed items, then re-run before retrying
+3. If pushing to `master`: confirm `npm run build:web` passes locally (Vercel auto-deploys on every master push)
+4. If router files changed: verify `apps/web/src/lib/api.ts` is also in the diff
