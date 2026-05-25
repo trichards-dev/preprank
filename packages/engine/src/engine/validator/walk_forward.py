@@ -68,11 +68,11 @@ def run(cfg: WalkForwardConfig, output_root: str | None = None):
     Returns whatever `runner.run_validation` returns.
     """
     return _runner.run_validation(
+        cfg.prediction_config,
         config_label=cfg.config_label,
-        prediction_config=cfg.prediction_config,
         seasons=seasons_for_run(cfg),
         holdout_seasons=cfg.holdout_seasons,
         sports=cfg.sports,
-        persist_predictions=cfg.persist_predictions,
-        output_root=output_root,
+        write_to_db=cfg.persist_predictions,
+        output_dir=output_root or "reports",
     )
