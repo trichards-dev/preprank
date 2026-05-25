@@ -32,31 +32,48 @@ US_STATE_CODES = frozenset({
     "DC", "PR", "VI",
 })
 
-# "Name - XX" (state suffix) — sports scrapers (volleyball, basketball, etc.)
-# encode OOS opponents this way because the lhsaaonline.org sports schedule
-# pages don't surface a dedicated OOS column the way football does.
-_OOS_SUFFIX_RE = re.compile(r"\s+-\s+([A-Z]{2})$")
+# OOS suffix patterns (verified against actual scraped names 2026-05-25):
+#   - lhsaaonline sports pages:  "Alto - TX"               (dash + space)
+#   - lhsaaonline football pages: "Drew Central, AR"       (comma + space)
+#   - parenthesized cities:       "KIPP Northeast (Houston, TX)"
+# All three resolve to a trailing 2-letter US state code.
+_OOS_SUFFIX_RES = [
+    re.compile(r"\s+-\s+([A-Z]{2})$"),       # " - XX"
+    re.compile(r",\s+([A-Z]{2})\)?\s*$"),     # ", XX" or ", XX)"
+]
 
 
 def detect_oos_state(opponent_name: str) -> str | None:
     """Returns 2-letter state code if `opponent_name` looks like an OOS school.
 
-    Matches the `" - XX"` suffix pattern (where XX is a recognized US state
-    abbreviation other than LA). Used by the sports ingest as a fallback
-    for the missing `is_oos` column.
+    Recognizes the patterns scraped from lhsaaonline.org:
+      * " - XX" (sports schedules use this)
+      * ", XX" (football schedules use this)
+      * ", XX)" (parenthesized city + state)
+
+    Excludes LA (Louisiana) — those are name variants of in-state schools,
+    not OOS opponents.
 
     >>> detect_oos_state("Alto - TX")
+    'TX'
+    >>> detect_oos_state("Drew Central, AR")
+    'AR'
+    >>> detect_oos_state("KIPP Northeast (Houston, TX)")
     'TX'
     >>> detect_oos_state("Acadiana Renaissance Charter") is None
     True
     """
-    m = _OOS_SUFFIX_RE.search(opponent_name or "")
-    if not m:
+    if not opponent_name:
         return None
-    code = m.group(1)
-    if code == "LA" or code not in US_STATE_CODES:
-        return None
-    return code
+    for regex in _OOS_SUFFIX_RES:
+        m = regex.search(opponent_name)
+        if not m:
+            continue
+        code = m.group(1)
+        if code == "LA" or code not in US_STATE_CODES:
+            return None
+        return code
+    return None
 
 
 def get_or_create_oos_school(

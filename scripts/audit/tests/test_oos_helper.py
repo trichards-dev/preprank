@@ -5,10 +5,18 @@ from scripts.oos_helper import detect_oos_state, get_or_create_oos_school
 
 
 def test_detect_oos_state_recognizes_state_suffix():
+    # Dash separator (sports schedules)
     assert detect_oos_state("Alto - TX") == "TX"
     assert detect_oos_state("Madison Central - MS") == "MS"
     assert detect_oos_state("Belen Jesuit - FL") == "FL"
     assert detect_oos_state("Hot Springs - AR") == "AR"
+    # Comma separator (football schedules)
+    assert detect_oos_state("Dallas Christian School, TX") == "TX"
+    assert detect_oos_state("Drew Central, AR") == "AR"
+    assert detect_oos_state("Germantown High School, MS") == "MS"
+    # Parenthesized city
+    assert detect_oos_state("KIPP Northeast (Houston, TX)") == "TX"
+    assert detect_oos_state("Holy Cross San Antonio, TX") == "TX"
 
 
 def test_detect_oos_state_skips_louisiana():
