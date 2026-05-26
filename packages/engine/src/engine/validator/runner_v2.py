@@ -2,6 +2,11 @@
 on the train fold, predicts holdout with ``predict_game_v3(strict=True)``,
 and applies the HALT-rules from Reese's 2026-05-26 Phase 2 sign-off.
 
+Also exposes ``run_phase4a_hfa_ablation`` — fits BOTH the baseline (β₂
+fitted) and the HFA-ablation (β₂=0) per sport, then runs the per-sport
+paired-bootstrap CI + Benjamini-Hochberg FDR across the 8 sports per
+Reese's 2026-05-26 evening Phase 4a scope.
+
 Distinct from the v1 ``runner.run_validation`` path:
 
 * v1 path (``runner._predict_inputs``) uses the additive-signal
@@ -50,6 +55,7 @@ from .data import (
     load_sports_map,
     load_teams_with_schools,
 )
+from .fdr import benjamini_hochberg
 from .metrics import (
     bootstrap_ci,
     brier_score,
@@ -429,4 +435,258 @@ def run_phase2_baseline(
     )
 
     _apply_halt_rules(result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4a — per-sport HFA ablation
+# ---------------------------------------------------------------------------
+@dataclass
+class SportPhase4aResult:
+    """Per-sport result block for Phase 4a HFA ablation.
+
+    Lift metrics compute as (baseline - ablation): positive lift means
+    the baseline (with per-sport β₂) outperforms the ablation (β₂=0).
+    """
+
+    sport: str
+    fit_baseline: FitResult
+    fit_ablation: FitResult
+    n_holdout: int
+    baseline_accuracy: float
+    ablation_accuracy: float
+    accuracy_lift: float
+    accuracy_lift_ci: tuple[float, float]
+    baseline_brier: float
+    ablation_brier: float
+    brier_lift: float                       # ablation - baseline (positive = baseline better)
+    brier_lift_ci: tuple[float, float]
+    p_value_one_sided: float                # P(lift <= 0) from bootstrap; one-sided
+    significant_after_fdr: bool = False
+
+
+@dataclass
+class Phase4aResult:
+    """Aggregated output of one Phase 4a HFA-ablation run."""
+
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, SportPhase4aResult] = field(default_factory=dict)
+    n_significant_after_fdr: int = 0
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+def _paired_bootstrap_lift(
+    baseline_preds: list[PredictionRecord],
+    ablation_preds: list[PredictionRecord],
+    *,
+    n_resamples: int,
+    seed: int,
+    ci: float = 0.95,
+) -> tuple[float, tuple[float, float], float, tuple[float, float], float]:
+    """Paired-bootstrap CI on per-game (acc, brier) lift + one-sided p-value
+    for the accuracy lift.
+
+    Returns (acc_lift, acc_ci, brier_lift, brier_ci, p_one_sided).
+
+    p_one_sided = fraction of bootstrap replicates where acc_lift <= 0.
+    Tests null hypothesis "baseline is no better than ablation in accuracy".
+    """
+    import numpy as np
+
+    assert len(baseline_preds) == len(ablation_preds)
+    n = len(baseline_preds)
+    if n == 0:
+        return (0.0, (0.0, 0.0), 0.0, (0.0, 0.0), 1.0)
+
+    # Per-game correctness flags
+    b_correct = np.array([
+        1.0 if (p.home_win_probability > 0.5) == bool(p.actual_home_won) else 0.0
+        for p in baseline_preds
+    ], dtype=np.float64)
+    a_correct = np.array([
+        1.0 if (p.home_win_probability > 0.5) == bool(p.actual_home_won) else 0.0
+        for p in ablation_preds
+    ], dtype=np.float64)
+    y = np.array([1.0 if p.actual_home_won else 0.0 for p in baseline_preds], dtype=np.float64)
+    b_p = np.array([p.home_win_probability for p in baseline_preds], dtype=np.float64)
+    a_p = np.array([p.home_win_probability for p in ablation_preds], dtype=np.float64)
+    b_brier_g = (b_p - y) ** 2
+    a_brier_g = (a_p - y) ** 2
+
+    acc_lift = float(b_correct.mean() - a_correct.mean())
+    brier_lift = float(a_brier_g.mean() - b_brier_g.mean())  # positive = baseline better
+
+    rng = np.random.default_rng(seed)
+    acc_replicates = np.empty(n_resamples, dtype=np.float64)
+    brier_replicates = np.empty(n_resamples, dtype=np.float64)
+    for r in range(n_resamples):
+        idx = rng.integers(0, n, size=n)
+        acc_replicates[r] = float(b_correct[idx].mean() - a_correct[idx].mean())
+        brier_replicates[r] = float(a_brier_g[idx].mean() - b_brier_g[idx].mean())
+
+    lo_q = (1 - ci) / 2
+    hi_q = 1 - lo_q
+    acc_ci = (float(np.quantile(acc_replicates, lo_q)),
+              float(np.quantile(acc_replicates, hi_q)))
+    brier_ci = (float(np.quantile(brier_replicates, lo_q)),
+                float(np.quantile(brier_replicates, hi_q)))
+    p_one_sided = float((acc_replicates <= 0).mean())
+
+    return (acc_lift, acc_ci, brier_lift, brier_ci, p_one_sided)
+
+
+def run_phase4a_hfa_ablation(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-phase4a-hfa-ablation",
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    fdr_alpha: float = 0.05,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase4aResult:
+    """Phase 4a: per-sport β₂ ablation vs baseline, paired-bootstrap + FDR.
+
+    For each sport:
+      1. Fit baseline (all 6 β free) on train fold
+      2. Fit ablation (β₂=0 constrained) on train fold
+      3. Predict holdout with both
+      4. Paired-bootstrap CI on (accuracy_baseline - accuracy_ablation)
+         and (brier_ablation - brier_baseline)
+      5. One-sided p-value: P(acc_lift <= 0)
+
+    After all sports: Benjamini-Hochberg FDR at α=``fdr_alpha`` over the
+    8 per-sport p-values. A sport is "significantly lifted by per-sport
+    HFA" iff both the p-value survives FDR AND the accuracy-lift CI
+    lower bound is positive.
+
+    Halts at the Phase 4a boundary regardless of outcome — caller MUST
+    do its own sign-off cycle before promoting to Phase 4b.
+    """
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    result = Phase4aResult(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    per_sport_p_values: list[tuple[str, float]] = []
+
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+
+        # Load per-season inputs
+        inputs_list: list[RunInputs] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_list.append(load_run_inputs(sb, sid, sport_name, season, teams=teams))
+
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inp in inputs_list:
+            rows = _build_training_rows(inp)
+            if inp.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows or not hold_rows:
+            result.fit_warnings.append(f"{sport_name}: insufficient rows — skipped")
+            continue
+
+        try:
+            fit_b = fit_sport(sport_name, train_rows, cv_seed=seed)
+            fit_a = fit_sport(sport_name, train_rows, cv_seed=seed, fixed_indices=[2])
+        except Exception as e:
+            result.fit_warnings.append(
+                f"{sport_name}: fit raised {type(e).__name__}: {e}"
+            )
+            continue
+
+        if not fit_b.converged:
+            result.fit_warnings.append(f"{sport_name}: baseline did not converge cleanly")
+        if not fit_a.converged:
+            result.fit_warnings.append(f"{sport_name}: ablation did not converge cleanly")
+
+        config_b = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_b.coefficients}
+        )
+        config_a = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_a.coefficients}
+        )
+        preds_b = _predict_rows(hold_rows, sport_name, config_b)
+        preds_a = _predict_rows(hold_rows, sport_name, config_a)
+
+        b_acc = game_winner_accuracy(preds_b)
+        a_acc = game_winner_accuracy(preds_a)
+        b_bri = brier_score(preds_b)
+        a_bri = brier_score(preds_a)
+
+        acc_lift, acc_ci, brier_lift, brier_ci, p_one = _paired_bootstrap_lift(
+            preds_b, preds_a,
+            n_resamples=n_bootstrap, seed=seed,
+        )
+
+        sport_result = SportPhase4aResult(
+            sport=sport_name,
+            fit_baseline=fit_b,
+            fit_ablation=fit_a,
+            n_holdout=len(hold_rows),
+            baseline_accuracy=b_acc,
+            ablation_accuracy=a_acc,
+            accuracy_lift=acc_lift,
+            accuracy_lift_ci=acc_ci,
+            baseline_brier=b_bri,
+            ablation_brier=a_bri,
+            brier_lift=brier_lift,
+            brier_lift_ci=brier_ci,
+            p_value_one_sided=p_one,
+        )
+        result.sports[sport_name] = sport_result
+        per_sport_p_values.append((sport_name, p_one))
+
+    # Benjamini-Hochberg FDR across the 8 per-sport p-values
+    if per_sport_p_values:
+        sport_names = [s for s, _ in per_sport_p_values]
+        p_list = [p for _, p in per_sport_p_values]
+        flags = benjamini_hochberg(p_list, alpha=fdr_alpha)
+        for sport_name, sig in zip(sport_names, flags):
+            sr = result.sports[sport_name]
+            # Spec requires BOTH FDR-significance AND CI-lower-bound > 0
+            sr.significant_after_fdr = bool(sig and sr.accuracy_lift_ci[0] > 0.0)
+            if sr.significant_after_fdr:
+                result.n_significant_after_fdr += 1
+
     return result

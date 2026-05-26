@@ -555,3 +555,53 @@ def test_predict_v3_strict_passes_when_coefficients_present():
     away = GameState(rating=0.0)
     p = predict_game_v3(home, away, "Football", config, strict=True)
     assert 0.0 < p < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Constrained fit (Phase 4a HFA ablation)
+# ---------------------------------------------------------------------------
+
+
+def test_fixed_indices_constrains_those_betas_to_zero():
+    """fixed_indices=[2] must produce β₂=0.0 exactly in the result."""
+    true_beta = [-0.05, 0.4, 0.3, 0.0, 0.0, 0.0]
+    rows = _make_synthetic_games(2000, true_beta, seed=51)
+    result = fit_sport("X", rows, fixed_indices=[2], l2_lambda_per_game=1e-4)
+
+    assert result.coefficients["beta_2"] == 0.0
+    # Other coefficients refit freely
+    assert abs(result.coefficients["beta_1"] - true_beta[1]) < 0.10
+
+
+def test_fixed_indices_multiple_betas():
+    true_beta = [0.0, 0.4, 0.3, 0.1, 0.0, 0.0]
+    rows = _make_synthetic_games(1500, true_beta, seed=52)
+    result = fit_sport("X", rows, fixed_indices=[2, 4, 5], l2_lambda_per_game=1e-4)
+
+    assert result.coefficients["beta_2"] == 0.0
+    assert result.coefficients["beta_4"] == 0.0
+    assert result.coefficients["beta_5"] == 0.0
+
+
+def test_fixed_indices_out_of_range_raises():
+    rows = _make_synthetic_games(100, [0.0, 0.4, 0.0, 0.0, 0.0, 0.0], seed=1)
+    with pytest.raises(ValueError, match="fixed_indices contains"):
+        fit_sport("X", rows, fixed_indices=[99], l2_lambda_per_game=1e-4)
+
+
+def test_fixed_indices_changes_other_betas_vs_unconstrained():
+    """Ablation must actually refit the remaining coefficients —
+    not just zero out β₂ on the joint fit."""
+    true_beta = [0.05, 0.4, 0.3, 0.0, 0.0, 0.0]
+    rows = _make_synthetic_games(2000, true_beta, seed=53, neutral_fraction=0.0)
+    # All games have HFA_indicator=1, so β₀ and β₂ are perfectly collinear.
+    # Unconstrained fit splits the home-bias between β₀ and β₂.
+    # β₂=0 constraint should push the entire bias into β₀.
+    unconstrained = fit_sport("X", rows, l2_lambda_per_game=1e-4)
+    ablated = fit_sport("X", rows, fixed_indices=[2], l2_lambda_per_game=1e-4)
+
+    # β₀_ablated should absorb β₂'s contribution from the unconstrained fit
+    expected_b0 = (
+        unconstrained.coefficients["beta_0"] + unconstrained.coefficients["beta_2"]
+    )
+    assert abs(ablated.coefficients["beta_0"] - expected_b0) < 0.05

@@ -335,6 +335,7 @@ def fit_sport(
     max_iter: int = 200,
     gtol: float = 1e-6,
     initial_coefficients: Sequence[float] | None = None,
+    fixed_indices: Sequence[int] | None = None,
 ) -> FitResult:
     """Fit per-sport β vector by L2-regularized max-likelihood logistic regression.
 
@@ -374,12 +375,20 @@ def fit_sport(
         Gradient-norm convergence tolerance.
     initial_coefficients : optional sequence of float
         Warm start for L-BFGS-B. Defaults to a zero vector (uninformed prior).
+    fixed_indices : optional sequence of int
+        Coefficient indices that must remain 0.0 in the fitted result.
+        Implementation: those columns are dropped from the design matrix
+        before optimization; the reduced β is then padded with zeros at
+        the fixed indices when written to the FitResult. Used by Phase
+        4a's HFA ablation (``fixed_indices=[2]`` pins β₂=0).
 
     Returns
     -------
     FitResult with coefficients keyed by ``COEF_NAMES``. The
     ``selected_lambda_per_game`` field records the CV-chosen λ, and
-    ``lambda_cv_scores`` records the per-λ mean held-out NLL.
+    ``lambda_cv_scores`` records the per-λ mean held-out NLL. When
+    ``fixed_indices`` is supplied, the constrained coefficients are
+    exactly 0.0 in the result (and ``COEF_NAMES`` ordering is preserved).
 
     Raises
     ------
@@ -405,24 +414,41 @@ def fit_sport(
         y[i] = 1.0 if row.home_won else 0.0
         w[i] = mercy_weight if row.is_mercy else 1.0
 
-    beta0 = (
+    beta0_full = (
         np.array(list(initial_coefficients), dtype=np.float64)
         if initial_coefficients is not None
         else np.zeros(N_FEATURES, dtype=np.float64)
     )
-    if beta0.shape != (N_FEATURES,):
+    if beta0_full.shape != (N_FEATURES,):
         raise ValueError(
-            f"initial_coefficients length {beta0.shape[0]} != N_FEATURES {N_FEATURES}"
+            f"initial_coefficients length {beta0_full.shape[0]} != N_FEATURES {N_FEATURES}"
         )
+
+    # Constrained-fit support: drop the fixed columns from X, fit on the
+    # reduced parameter vector, then pad zeros back at the fixed indices.
+    if fixed_indices:
+        fixed_set = set(int(i) for i in fixed_indices)
+        for i in fixed_set:
+            if not 0 <= i < N_FEATURES:
+                raise ValueError(
+                    f"fixed_indices contains {i} outside [0, {N_FEATURES})"
+                )
+        free_mask = np.array([i not in fixed_set for i in range(N_FEATURES)])
+        X_fit = X[:, free_mask]
+        beta0_fit = beta0_full[free_mask]
+    else:
+        free_mask = np.ones(N_FEATURES, dtype=bool)
+        X_fit = X
+        beta0_fit = beta0_full
 
     if l2_lambda_per_game is None:
         grid = lambda_grid if lambda_grid is not None else _LAMBDA_GRID_DEFAULT
         chosen_lambda, cv_scores = _choose_lambda_nested_cv(
-            X, y, w,
+            X_fit, y, w,
             lambdas=grid,
             n_folds=cv_n_folds,
             seed=cv_seed,
-            beta0=beta0,
+            beta0=beta0_fit,
             max_iter=max_iter,
             gtol=gtol,
         )
@@ -431,16 +457,19 @@ def fit_sport(
         cv_scores = {}
 
     l2_lambda = chosen_lambda * n
-    beta_hat, loss, iters, converged, message = _fit_with_lambda(
-        X, y, w, l2_lambda, beta0.copy(), max_iter, gtol
+    beta_fit_hat, loss, iters, converged, message = _fit_with_lambda(
+        X_fit, y, w, l2_lambda, beta0_fit.copy(), max_iter, gtol
     )
 
-    if not np.all(np.isfinite(beta_hat)):
+    if not np.all(np.isfinite(beta_fit_hat)):
         raise FitConvergenceError(
             f"fit_sport({sport!r}) produced non-finite coefficients: "
-            f"{beta_hat.tolist()} after {iters} iterations"
+            f"{beta_fit_hat.tolist()} after {iters} iterations"
         )
 
+    # Pad the reduced fit back to full β-vector with 0s at fixed indices
+    beta_hat = np.zeros(N_FEATURES, dtype=np.float64)
+    beta_hat[free_mask] = beta_fit_hat
     coefficients = {name: float(beta_hat[i]) for i, name in enumerate(COEF_NAMES)}
     return FitResult(
         sport=sport,
