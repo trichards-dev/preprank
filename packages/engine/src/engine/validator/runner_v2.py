@@ -1,0 +1,432 @@
+"""Phase 2 walk-forward runner — fits v2 logistic-regression β per sport
+on the train fold, predicts holdout with ``predict_game_v3(strict=True)``,
+and applies the HALT-rules from Reese's 2026-05-26 Phase 2 sign-off.
+
+Distinct from the v1 ``runner.run_validation`` path:
+
+* v1 path (``runner._predict_inputs``) uses the additive-signal
+  ``validator.predictor.predict_game`` with feature-flag config — frozen
+  for back-compat.
+* This module (Phase 2 v2 path) uses the fitted v2 model
+  (``prediction.model.fit_sport`` + ``predict_game_v3(strict=True)``).
+  Baseline = only β₀/β₁/β₂ identifiable (no Phase-4 features yet); the
+  remaining β slots fit to ~0.
+
+Per Reese 2026-05-26 sign-off conditions, this runner:
+
+* Computes 1000-resample bootstrap CIs for accuracy + Brier
+* Computes train/holdout accuracy gap and applies the < 0.005 gate
+* Computes per-sport calibration slope/intercept
+* Records ``selected_lambda_per_game`` per sport for audit
+* HALTs if overall holdout acc > 0.73 with no clear feature-side explanation
+  (the "Phase 1 leakage" guard — Phase 2 adds no features, so any jump that
+  large is suspicious)
+* Auto-promotes to Phase 4a-ready when overall Brier < 0.20 AND
+  train/holdout gap < 0.005
+"""
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from engine.prediction.config import PredictionConfig
+from engine.prediction.model import (
+    COEF_NAMES,
+    FitResult,
+    GameState,
+    GameTrainingRow,
+    MissingCoefficientsError,
+    fit_sport,
+    predict_game_v3,
+)
+
+from .data import (
+    ALL_SPORTS,
+    RunInputs,
+    load_run_inputs,
+    load_sports_map,
+    load_teams_with_schools,
+)
+from .metrics import (
+    bootstrap_ci,
+    brier_score,
+    game_winner_accuracy,
+    reliability_bins,
+)
+from .predictor import PredictionRecord
+from .runner import _resolve_pregame_rating
+
+
+# ---------------------------------------------------------------------------
+# HALT-rule thresholds (from Reese 2026-05-26 Phase 2 sign-off conditions)
+# ---------------------------------------------------------------------------
+HALT_ACCURACY_UPPER_BOUND = 0.73
+"""If overall holdout acc exceeds this without a feature-side explanation,
+HALT and audit for leakage. Baseline (no features) jumping above 0.73
+would repeat the same Phase-1 contamination pattern."""
+
+MAX_TRAIN_HOLDOUT_GAP = 0.005
+"""Overall train-acc minus holdout-acc must stay within this band."""
+
+AUTO_PROMOTE_BRIER_CEILING = 0.20
+"""Overall holdout Brier below this AND gap < MAX_TRAIN_HOLDOUT_GAP
+auto-promotes to Phase 4a without additional sign-off."""
+
+
+@dataclass
+class SportPhase2Result:
+    """Per-sport result block for one Phase 2 run."""
+
+    sport: str
+    fit: FitResult
+    n_train: int
+    n_holdout: int
+    train_accuracy: float
+    train_brier: float
+    holdout_accuracy: float
+    holdout_brier: float
+    holdout_accuracy_ci: tuple[float, float]
+    holdout_brier_ci: tuple[float, float]
+    calibration_slope: float
+    calibration_intercept: float
+    train_holdout_gap: float
+    halt_triggers: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Phase2Result:
+    """Aggregated output of one walk-forward Phase 2 baseline run."""
+
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, SportPhase2Result] = field(default_factory=dict)
+    overall_train_accuracy: float = 0.0
+    overall_train_brier: float = 0.0
+    overall_holdout_accuracy: float = 0.0
+    overall_holdout_brier: float = 0.0
+    overall_holdout_accuracy_ci: tuple[float, float] = (0.0, 0.0)
+    overall_holdout_brier_ci: tuple[float, float] = (0.0, 0.0)
+    overall_train_holdout_gap: float = 0.0
+    n_train: int = 0
+    n_holdout: int = 0
+    halt_triggers: list[str] = field(default_factory=list)
+    auto_promote_to_phase4a: bool = False
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Build per-game training rows from RunInputs
+# ---------------------------------------------------------------------------
+def _build_training_rows(
+    inputs: RunInputs,
+    *,
+    prior_year_finals_for_carryover: dict[int, float] | None = None,
+) -> list[GameTrainingRow]:
+    """Turn one sport-season's RunInputs into GameTrainingRow list.
+
+    Phase 2 baseline: only Δrating + HFA are signals; margin/off/def/pyc
+    signals are 0 because Phase 4 hasn't landed. Prior-year carryover is
+    populated when available for weeks 1-3 (so β₅ is identifiable on the
+    fold, though it's expected to fit near 0 at baseline).
+    """
+    rows: list[GameTrainingRow] = []
+    prior = prior_year_finals_for_carryover or inputs.prior_finals
+    for g in inputs.games:
+        w = int(g["_engine_week"])
+        h_team = g["home_team_id"]
+        a_team = g["away_team_id"]
+        h_div = inputs.teams.get(h_team, {}).get("division")
+        a_div = inputs.teams.get(a_team, {}).get("division")
+
+        h_rating, _ = _resolve_pregame_rating(
+            h_team, w, h_div, inputs.engine_ratings,
+            inputs.prior_finals, inputs.division_prior_medians,
+        )
+        a_rating, _ = _resolve_pregame_rating(
+            a_team, w, a_div, inputs.engine_ratings,
+            inputs.prior_finals, inputs.division_prior_medians,
+        )
+
+        hs = g.get("home_score")
+        as_ = g.get("away_score")
+        if hs is None or as_ is None:
+            continue  # incomplete games can't train
+
+        is_neutral = bool(g.get("neutral_site", False))
+
+        home_state = GameState(
+            rating=h_rating,
+            prior_year_rating=prior.get(h_team),
+            week_number=w,
+            season_year=inputs.season_year,
+        )
+        away_state = GameState(
+            rating=a_rating,
+            prior_year_rating=prior.get(a_team),
+            week_number=w,
+            season_year=inputs.season_year,
+        )
+        rows.append(
+            GameTrainingRow(
+                home_state=home_state,
+                away_state=away_state,
+                is_neutral_site=is_neutral,
+                is_mercy=False,  # Phase 4c will populate this; Phase 2 baseline doesn't use it
+                home_won=bool(hs > as_),
+            )
+        )
+    return rows
+
+
+def _predict_rows(
+    rows: list[GameTrainingRow],
+    sport: str,
+    config: PredictionConfig,
+) -> list[PredictionRecord]:
+    """Wrap fitted-model predictions in PredictionRecord for metric reuse."""
+    preds: list[PredictionRecord] = []
+    for row in rows:
+        p_home = predict_game_v3(
+            row.home_state, row.away_state,
+            sport, config,
+            is_neutral_site=row.is_neutral_site,
+            strict=True,
+        )
+        preds.append(
+            PredictionRecord(
+                game_id=0,
+                home_team_id=0,
+                away_team_id=0,
+                home_win_probability=float(p_home),
+                predicted_home_score=None,
+                predicted_away_score=None,
+                predicted_spread=None,
+                home_rating_pregame=row.home_state.rating,
+                away_rating_pregame=row.away_state.rating,
+                home_cold_start=row.home_state.prior_year_rating is None,
+                away_cold_start=row.away_state.prior_year_rating is None,
+                actual_home_won=row.home_won,
+                sport=sport,
+                season_year=row.home_state.season_year,
+                week_number=row.home_state.week_number,
+            )
+        )
+    return preds
+
+
+def _calibration_slope_intercept(preds: list[PredictionRecord]) -> tuple[float, float]:
+    """OLS slope/intercept of (predicted, observed) — quick calibration health check."""
+    import numpy as np
+
+    if not preds:
+        return (1.0, 0.0)
+    x = np.array([p.home_win_probability for p in preds], dtype=np.float64)
+    y = np.array([1.0 if p.actual_home_won else 0.0 for p in preds], dtype=np.float64)
+    # Avoid degenerate case
+    if float(np.std(x)) < 1e-9:
+        return (0.0, float(np.mean(y)))
+    cov = float(np.mean((x - x.mean()) * (y - y.mean())))
+    slope = cov / float(np.var(x))
+    intercept = float(y.mean() - slope * x.mean())
+    return (slope, intercept)
+
+
+# ---------------------------------------------------------------------------
+# HALT-rule evaluation
+# ---------------------------------------------------------------------------
+def _apply_halt_rules(result: Phase2Result) -> None:
+    """Mutate ``result`` with halt_triggers + auto_promote_to_phase4a per
+    Reese 2026-05-26 Phase 2 sign-off conditions.
+
+    The train/holdout gap is read **bidirectionally** (`abs(gap) > 0.005`):
+    overfitting (positive gap) and "easy holdout" (negative gap) are both
+    flags. A symmetric bound catches both Phase-1-style contamination
+    AND distribution shifts where the holdout happens to be easier than
+    the train fold.
+    """
+    abs_gap = abs(result.overall_train_holdout_gap)
+
+    if result.overall_holdout_accuracy > HALT_ACCURACY_UPPER_BOUND:
+        result.halt_triggers.append(
+            f"overall holdout accuracy {result.overall_holdout_accuracy:.4f} > "
+            f"{HALT_ACCURACY_UPPER_BOUND:.2f} without feature-side explanation. "
+            "HALT and audit for leakage before Phase 4a starts (mirrors Phase 1 contamination pattern)."
+        )
+
+    if abs_gap > MAX_TRAIN_HOLDOUT_GAP:
+        result.halt_triggers.append(
+            f"overall |train - holdout| gap {result.overall_train_holdout_gap:+.4f} "
+            f"(|·|={abs_gap:.4f}) exceeds {MAX_TRAIN_HOLDOUT_GAP:.4f}. "
+            "HALT and audit: positive gap = overfit; negative gap = holdout easier than train."
+        )
+
+    # Auto-promote only when there are no triggers AND both conditions are met
+    if (
+        not result.halt_triggers
+        and result.overall_holdout_brier < AUTO_PROMOTE_BRIER_CEILING
+        and abs_gap < MAX_TRAIN_HOLDOUT_GAP
+    ):
+        result.auto_promote_to_phase4a = True
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+def run_phase2_baseline(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-baseline-v2-fitted",
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase2Result:
+    """Fit + evaluate Phase 2 baseline. See module docstring."""
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    # Load + bucket inputs by sport. Drop seasons removed entirely; train
+    # and holdout kept and tagged.
+    inputs_by_sport: dict[str, list[RunInputs]] = {}
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+        inputs_by_sport[sport_name] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_by_sport[sport_name].append(
+                load_run_inputs(sb, sid, sport_name, season, teams=teams)
+            )
+
+    result = Phase2Result(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    config = PredictionConfig()
+    all_train_preds: list[PredictionRecord] = []
+    all_hold_preds: list[PredictionRecord] = []
+
+    for sport_name, inputs_list in inputs_by_sport.items():
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inputs in inputs_list:
+            rows = _build_training_rows(inputs)
+            if inputs.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows:
+            result.fit_warnings.append(f"{sport_name}: no train rows — skipped")
+            continue
+
+        try:
+            fit = fit_sport(sport_name, train_rows, cv_seed=seed)
+        except Exception as e:
+            result.fit_warnings.append(f"{sport_name}: fit_sport raised {type(e).__name__}: {e}")
+            continue
+
+        if not fit.converged:
+            result.fit_warnings.append(
+                f"{sport_name}: fit did not converge cleanly (iters={fit.iterations}, "
+                f"message={fit.message!r})"
+            )
+
+        config.model_coefficients_by_sport[sport_name] = fit.coefficients
+
+        train_preds = _predict_rows(train_rows, sport_name, config)
+        hold_preds = _predict_rows(hold_rows, sport_name, config)
+
+        train_acc = game_winner_accuracy(train_preds)
+        train_bri = brier_score(train_preds)
+        hold_acc = game_winner_accuracy(hold_preds) if hold_preds else 0.0
+        hold_bri = brier_score(hold_preds) if hold_preds else 0.0
+
+        acc_ci = (
+            bootstrap_ci(game_winner_accuracy, hold_preds,
+                         n_resamples=n_bootstrap, ci=0.95, seed=seed)
+            if hold_preds else (0.0, 0.0)
+        )
+        bri_ci = (
+            bootstrap_ci(brier_score, hold_preds,
+                         n_resamples=n_bootstrap, ci=0.95, seed=seed + 1)
+            if hold_preds else (0.0, 0.0)
+        )
+        slope, intercept = _calibration_slope_intercept(hold_preds)
+
+        sport_result = SportPhase2Result(
+            sport=sport_name,
+            fit=fit,
+            n_train=len(train_rows),
+            n_holdout=len(hold_rows),
+            train_accuracy=train_acc,
+            train_brier=train_bri,
+            holdout_accuracy=hold_acc,
+            holdout_brier=hold_bri,
+            holdout_accuracy_ci=acc_ci,
+            holdout_brier_ci=bri_ci,
+            calibration_slope=slope,
+            calibration_intercept=intercept,
+            train_holdout_gap=train_acc - hold_acc,
+        )
+        result.sports[sport_name] = sport_result
+        all_train_preds.extend(train_preds)
+        all_hold_preds.extend(hold_preds)
+
+    # Overall metrics
+    if all_train_preds:
+        result.overall_train_accuracy = game_winner_accuracy(all_train_preds)
+        result.overall_train_brier = brier_score(all_train_preds)
+        result.n_train = len(all_train_preds)
+    if all_hold_preds:
+        result.overall_holdout_accuracy = game_winner_accuracy(all_hold_preds)
+        result.overall_holdout_brier = brier_score(all_hold_preds)
+        result.overall_holdout_accuracy_ci = bootstrap_ci(
+            game_winner_accuracy, all_hold_preds,
+            n_resamples=n_bootstrap, ci=0.95, seed=seed,
+        )
+        result.overall_holdout_brier_ci = bootstrap_ci(
+            brier_score, all_hold_preds,
+            n_resamples=n_bootstrap, ci=0.95, seed=seed + 1,
+        )
+        result.n_holdout = len(all_hold_preds)
+
+    result.overall_train_holdout_gap = (
+        result.overall_train_accuracy - result.overall_holdout_accuracy
+    )
+
+    _apply_halt_rules(result)
+    return result
