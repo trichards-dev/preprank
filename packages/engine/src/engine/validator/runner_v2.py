@@ -38,6 +38,8 @@ from datetime import datetime
 from typing import Any
 
 from engine.prediction.config import PredictionConfig
+from engine.prediction.config import PredictionConfig as _PredictionConfig  # noqa: F401
+from engine.prediction.features.recent_form import precompute_team_week_form
 from engine.prediction.model import (
     COEF_NAMES,
     FitResult,
@@ -134,6 +136,7 @@ def _build_training_rows(
     inputs: RunInputs,
     *,
     prior_year_finals_for_carryover: dict[int, float] | None = None,
+    recent_form_signals: dict[tuple[int, int], float] | None = None,
 ) -> list[GameTrainingRow]:
     """Turn one sport-season's RunInputs into GameTrainingRow list.
 
@@ -141,9 +144,15 @@ def _build_training_rows(
     signals are 0 because Phase 4 hasn't landed. Prior-year carryover is
     populated when available for weeks 1-3 (so β₅ is identifiable on the
     fold, though it's expected to fit near 0 at baseline).
+
+    Phase 4b: caller passes ``recent_form_signals`` mapping
+    ``(team_id, week)`` to the recency-weighted capped-margin signal
+    through that week. The runner looks up ``W-1`` for each game in
+    week ``W`` to get the pre-game signal.
     """
     rows: list[GameTrainingRow] = []
     prior = prior_year_finals_for_carryover or inputs.prior_finals
+    form = recent_form_signals or {}
     for g in inputs.games:
         w = int(g["_engine_week"])
         h_team = g["home_team_id"]
@@ -170,12 +179,14 @@ def _build_training_rows(
         home_state = GameState(
             rating=h_rating,
             prior_year_rating=prior.get(h_team),
+            recent_form_signal=float(form.get((h_team, w - 1), 0.0)),
             week_number=w,
             season_year=inputs.season_year,
         )
         away_state = GameState(
             rating=a_rating,
             prior_year_rating=prior.get(a_team),
+            recent_form_signal=float(form.get((a_team, w - 1), 0.0)),
             week_number=w,
             season_year=inputs.season_year,
         )
@@ -685,6 +696,190 @@ def run_phase4a_hfa_ablation(
         for sport_name, sig in zip(sport_names, flags):
             sr = result.sports[sport_name]
             # Spec requires BOTH FDR-significance AND CI-lower-bound > 0
+            sr.significant_after_fdr = bool(sig and sr.accuracy_lift_ci[0] > 0.0)
+            if sr.significant_after_fdr:
+                result.n_significant_after_fdr += 1
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b — recent-form weighting (Reese 2026-05-26 evening reordering)
+# ---------------------------------------------------------------------------
+@dataclass
+class SportPhase4bResult:
+    """Per-sport result block for Phase 4b recent-form ablation.
+
+    Mirrors SportPhase4aResult but on the β₆ slot. Lift positive means
+    the recent-form-enabled model beats the recent-form-ablated model.
+    """
+
+    sport: str
+    fit_baseline: FitResult            # WITH recent-form (β₆ free)
+    fit_ablation: FitResult            # WITHOUT recent-form (β₆ = 0)
+    n_holdout: int
+    baseline_accuracy: float
+    ablation_accuracy: float
+    accuracy_lift: float
+    accuracy_lift_ci: tuple[float, float]
+    baseline_brier: float
+    ablation_brier: float
+    brier_lift: float
+    brier_lift_ci: tuple[float, float]
+    p_value_one_sided: float
+    significant_after_fdr: bool = False
+
+
+@dataclass
+class Phase4bResult:
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, SportPhase4bResult] = field(default_factory=dict)
+    n_significant_after_fdr: int = 0
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+def run_phase4b_recent_form_ablation(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-phase4b-recent-form-ablation",
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    fdr_alpha: float = 0.05,
+    recent_form_config: Any | None = None,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase4bResult:
+    """Phase 4b: per-sport β₆ ablation. Recent-form-enabled vs β₆=0.
+
+    Mirrors ``run_phase4a_hfa_ablation``: fits ref + ablation per sport,
+    computes paired-bootstrap CI on (acc, brier) deltas, applies
+    Benjamini-Hochberg FDR across the 8 per-sport tests. Halts at the
+    phase boundary regardless of outcome per the v2 spec.
+    """
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    # Use a default PredictionConfig for the recent-form precompute (the
+    # caller can override via ``recent_form_config`` if they want
+    # different margin caps for the form computation).
+    rf_config = recent_form_config or _PredictionConfig()
+
+    result = Phase4bResult(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    per_sport_p_values: list[tuple[str, float]] = []
+
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+
+        inputs_list: list[RunInputs] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_list.append(load_run_inputs(sb, sid, sport_name, season, teams=teams))
+
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inp in inputs_list:
+            form_table = precompute_team_week_form(inp.games, sport_name, rf_config)
+            rows = _build_training_rows(inp, recent_form_signals=form_table)
+            if inp.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows or not hold_rows:
+            result.fit_warnings.append(f"{sport_name}: insufficient rows — skipped")
+            continue
+
+        try:
+            fit_b = fit_sport(sport_name, train_rows, cv_seed=seed)
+            fit_a = fit_sport(sport_name, train_rows, cv_seed=seed, fixed_indices=[6])
+        except Exception as e:
+            result.fit_warnings.append(
+                f"{sport_name}: fit raised {type(e).__name__}: {e}"
+            )
+            continue
+
+        if not fit_b.converged:
+            result.fit_warnings.append(f"{sport_name}: ref did not converge cleanly")
+        if not fit_a.converged:
+            result.fit_warnings.append(f"{sport_name}: ablation did not converge cleanly")
+
+        config_b = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_b.coefficients}
+        )
+        config_a = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_a.coefficients}
+        )
+        preds_b = _predict_rows(hold_rows, sport_name, config_b)
+        preds_a = _predict_rows(hold_rows, sport_name, config_a)
+
+        b_acc = game_winner_accuracy(preds_b)
+        a_acc = game_winner_accuracy(preds_a)
+        b_bri = brier_score(preds_b)
+        a_bri = brier_score(preds_a)
+
+        acc_lift, acc_ci, brier_lift, brier_ci, p_one = _paired_bootstrap_lift(
+            preds_b, preds_a, n_resamples=n_bootstrap, seed=seed,
+        )
+
+        sport_result = SportPhase4bResult(
+            sport=sport_name,
+            fit_baseline=fit_b,
+            fit_ablation=fit_a,
+            n_holdout=len(hold_rows),
+            baseline_accuracy=b_acc,
+            ablation_accuracy=a_acc,
+            accuracy_lift=acc_lift,
+            accuracy_lift_ci=acc_ci,
+            baseline_brier=b_bri,
+            ablation_brier=a_bri,
+            brier_lift=brier_lift,
+            brier_lift_ci=brier_ci,
+            p_value_one_sided=p_one,
+        )
+        result.sports[sport_name] = sport_result
+        per_sport_p_values.append((sport_name, p_one))
+
+    if per_sport_p_values:
+        sport_names = [s for s, _ in per_sport_p_values]
+        p_list = [p for _, p in per_sport_p_values]
+        flags = benjamini_hochberg(p_list, alpha=fdr_alpha)
+        for sport_name, sig in zip(sport_names, flags):
+            sr = result.sports[sport_name]
             sr.significant_after_fdr = bool(sig and sr.accuracy_lift_ci[0] > 0.0)
             if sr.significant_after_fdr:
                 result.n_significant_after_fdr += 1

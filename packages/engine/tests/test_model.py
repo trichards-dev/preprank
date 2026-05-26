@@ -45,7 +45,21 @@ def _make_synthetic_games(
     true logistic. ``neutral_fraction`` defaults to 0.5 so β₀ and β₂
     are cleanly identified — in real data HFA_indicator is ~always 1
     making the two collinear, but for recovery tests we balance them.
+
+    ``true_beta`` is padded with zeros at the tail to length
+    ``N_FEATURES`` — this keeps test data forward-compatible when
+    coefficient slots are added (β₆ added 2026-05-26 for Phase 4b).
     """
+    # Forward-compatible padding: existing tests pass length-6 true_beta;
+    # newly-added slots default to 0 in the data-generating model.
+    from engine.prediction.model import N_FEATURES
+
+    padded = list(true_beta) + [0.0] * (N_FEATURES - len(true_beta))
+    if len(padded) > N_FEATURES:
+        raise AssertionError(
+            f"true_beta length {len(true_beta)} exceeds N_FEATURES={N_FEATURES}"
+        )
+
     rng = np.random.default_rng(seed)
     rows: list[GameTrainingRow] = []
     for _ in range(n):
@@ -59,6 +73,8 @@ def _make_synthetic_games(
         a_off = rng.normal(0.0, 1.0)
         h_def = rng.normal(0.0, 1.0)
         a_def = rng.normal(0.0, 1.0)
+        h_form = rng.normal(0.0, 1.0)
+        a_form = rng.normal(0.0, 1.0)
         # Prior-year ratings: present for ~half the rows; missing for the rest
         h_prior = rng.normal(0.0, 5.0) if rng.random() < 0.5 else None
         a_prior = rng.normal(0.0, 5.0) if rng.random() < 0.5 else None
@@ -73,6 +89,7 @@ def _make_synthetic_games(
             off_signal=h_off,
             def_signal=h_def,
             prior_year_rating=h_prior,
+            recent_form_signal=h_form,
             week_number=week,
         )
         away = GameState(
@@ -81,10 +98,11 @@ def _make_synthetic_games(
             off_signal=a_off,
             def_signal=a_def,
             prior_year_rating=a_prior,
+            recent_form_signal=a_form,
             week_number=week,
         )
         x = _feature_vector(home, away, is_neutral_site=is_neutral)
-        z = float(np.array(true_beta, dtype=np.float64) @ x)
+        z = float(np.array(padded, dtype=np.float64) @ x)
         p_home = 1.0 / (1.0 + math.exp(-z))
         outcome = bool(rng.random() < p_home)
         rows.append(
@@ -128,12 +146,15 @@ def test_fit_recovers_known_betas_on_synthetic_data():
         "beta_4": 0.10,
         "beta_5": 0.10,
     }
+    # Padded true_beta for forward-compat with newly-added slots
+    padded_true = list(true_beta) + [0.0] * (len(COEF_NAMES) - len(true_beta))
+    default_tol = 0.10
     for i, name in enumerate(COEF_NAMES):
         recovered = result.coefficients[name]
-        diff = abs(recovered - true_beta[i])
-        tol = tolerances[name]
+        diff = abs(recovered - padded_true[i])
+        tol = tolerances.get(name, default_tol)
         assert diff < tol, (
-            f"{name}: |{recovered:.4f} - {true_beta[i]:.4f}| = {diff:.4f} "
+            f"{name}: |{recovered:.4f} - {padded_true[i]:.4f}| = {diff:.4f} "
             f"(tolerance {tol:.2f})"
         )
 
@@ -175,6 +196,7 @@ def test_fitted_model_matches_data_generating_predictions_on_holdout():
         model_coefficients_by_sport={"Synthetic": result.coefficients}
     )
 
+    padded_true = list(true_beta) + [0.0] * (len(COEF_NAMES) - len(true_beta))
     errors = []
     for row in holdout:
         p_fitted = predict_game_v3(
@@ -187,7 +209,7 @@ def test_fitted_model_matches_data_generating_predictions_on_holdout():
         x = _feature_vector(
             row.home_state, row.away_state, is_neutral_site=row.is_neutral_site
         )
-        z_true = float(np.array(true_beta, dtype=np.float64) @ x)
+        z_true = float(np.array(padded_true, dtype=np.float64) @ x)
         p_true = 1.0 / (1.0 + math.exp(-z_true))
         errors.append(abs(p_fitted - p_true))
 

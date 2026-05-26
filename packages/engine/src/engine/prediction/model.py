@@ -49,15 +49,17 @@ class FitConvergenceError(RuntimeError):
 
 
 # Coefficient name ↔ feature-vector index. Order is load-bearing for the
-# fit + predict paths. Phase 4f, if it adds a logit term rather than an
-# engine tweak, appends ``beta_6`` at index 6.
+# fit + predict paths. β₆ (recent-form) was added 2026-05-26 evening per
+# Reese's Phase 4b sign-off — Phase 4b reorders the v2 plan to put
+# recent-form ahead of log-margin / offdef / prior-year carryover.
 COEF_NAMES: tuple[str, ...] = (
     "beta_0",  # intercept
     "beta_1",  # Δrating
     "beta_2",  # HFA indicator
-    "beta_3",  # Δf_margin (Phase 4b)
-    "beta_4",  # Δf_offdef (Phase 4d)
-    "beta_5",  # Δf_pyc    (Phase 4e)
+    "beta_3",  # Δf_margin (log-compressed scoring margin)
+    "beta_4",  # Δf_offdef (Massey-style offense/defense decomposition)
+    "beta_5",  # Δf_pyc    (prior-year carryover, weeks 1-3 only)
+    "beta_6",  # Δf_recent_form (recency-weighted capped-margin signal)
 )
 
 N_FEATURES = len(COEF_NAMES)
@@ -82,6 +84,7 @@ class GameState:
     off_signal: float = 0.0
     def_signal: float = 0.0
     prior_year_rating: float | None = None
+    recent_form_signal: float = 0.0
     week_number: int = 1
     season_year: int = 0
 
@@ -149,11 +152,11 @@ def _feature_vector(
     *,
     is_neutral_site: bool,
 ) -> np.ndarray:
-    """Build the 6-element feature vector for one game.
+    """Build the feature vector for one game.
 
-    Indices map to ``COEF_NAMES``. Always returns a length-6 array even
-    if upstream Phase 4 features haven't filled their signals — those
-    slots evaluate to 0 and their β stays at 0 in baseline fits.
+    Returns a length-``N_FEATURES`` array with indices mapped to
+    ``COEF_NAMES``. Unfilled upstream signals evaluate to 0 and their β
+    stays at 0 in baseline fits.
     """
     hfa_indicator = 0.0 if is_neutral_site else 1.0
 
@@ -169,6 +172,7 @@ def _feature_vector(
             home.margin_signal - away.margin_signal,                    # β₃ Δf_margin
             f_offdef,                                                   # β₄ Δf_offdef
             _pyc(home) - _pyc(away),                                    # β₅ Δf_pyc
+            home.recent_form_signal - away.recent_form_signal,          # β₆ Δf_recent_form
         ],
         dtype=np.float64,
     )
