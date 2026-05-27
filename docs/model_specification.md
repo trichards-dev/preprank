@@ -51,6 +51,8 @@ The engine's per-week rating, evaluated as of the end of week *w-1* (the week im
 
 This is the dominant signal. Baseline (Phase 3) uses Δrating alone; β₂..β₅ default to 0 in baseline and are unlocked one feature at a time across Phases 4a-4f.
 
+**What the rating consumes (added 2026-05-27 after Phase 4c mechanism check):** The LHSAA engine power rating in `packages/engine/src/engine/power_rating.py` consumes **wins/losses + opponent W-L record + classification level only — it does NOT consume score margins.** Per `calculate_game_points` (L20-34): `result_points = 10 if won else 0` (boolean W/L), `play_up_points = 2 · play_up_levels` (classification only), `opponent_wins_points = (opp.wins / opp.games_played) · 10` (opponent W/L only). The iterative `calculate_all_ratings` loop (L92-127) reads only `won` and opponent records — scores never enter. **The engine rating is W/L+SoS-based, not margin-aware.** This matters for interpreting Phase 4c+ ablation results: any "Δrating already captures margin" reasoning is wrong; margin information enters the model only through dedicated margin features (β₃, β₆), never through β₁.
+
 #### HFA_indicator — home-field advantage
 
 ```
@@ -61,9 +63,9 @@ HFA_indicator(g) = +1 if game is at home team's venue
 
 Per LHSAA Bulletin, postseason games above the regional level are at neutral sites. The audit's `games.neutral_site` flag (populated by ingest, value `True` for known neutral games) maps to indicator 0.
 
-#### Δf_margin — log-compressed historical scoring margin (Phase 4b)
+#### Δf_margin — log-compressed historical scoring margin (Phase 4c)
 
-The home team's recent-margin signal minus the away team's:
+The home team's cumulative log-compressed margin signal minus the away team's:
 
 ```
 f_margin(t, y, w) = mean over team t's games in [season_start, week w-1] of:
@@ -74,7 +76,9 @@ f_margin(t, y, w) = mean over team t's games in [season_start, week w-1] of:
 
 The log compression mutes blowouts without discarding them (a 49-7 win contributes ln(43) ≈ 3.76 vs a 21-14 win's ln(8) ≈ 2.08 — informative ordering, less hostage to runaway scores). Scale parameter not needed because β₃ absorbs it.
 
-Reference implementation will land in `prediction/features/log_margin.py` during Phase 4b.
+Reference implementation: `prediction/features/log_margin.py` (landed 2026-05-27 during Phase 4c).
+
+**β₃ disposition: currently pinned to 0** based on Phase 4c null finding (run_id `166c2ce7-356c-44f0-a865-ff3c470f8f61`, 2026-05-27). All 8 sports showed accuracy lift in the noise band (max +0.0017, no FDR-significance, 0/8 above the 2pp audit threshold). The β₃ slot adds no marginal predictive power above β₁·Δrating + β₆·Δf_recent_form. Mechanism: β₆ recent-form already absorbs margin information via its capped_margin signal (it IS a margin feature, just recency-weighted). β₃ is redundant with β₆, not with β₁ — β₁ is W/L+SoS-based and contains no margin info (see "What the rating consumes" above). The slot is preserved in the functional form for re-evaluation if the engine rating definition changes (e.g., a future rating system that consumes margins would shift this redundancy boundary).
 
 #### Δf_offdef — Massey-style offense/defense decomposition (Phase 4d)
 
@@ -192,6 +196,21 @@ Four conditions from `claude-memory/apps/preprank/decisions.md` 2026-05-26 "TASK
 2. **No accuracy claims until Phase 6 recalibration is applied** when the calibration slope is outside [0.85, 1.15] for the sport. Tracked via `ReleaseMetadata.recalibration_required` + `recalibration_applied`; the gate blocks when required=True and applied=False.
 3. **Marketing claims (Phase 7) rewritten for rigor positioning.** The phrase "beats professional benchmarks" (and similar) is prohibited from any artifact this model's outputs feed into. Enforced by `scan_for_prohibited_phrases` which raises `ReleaseGateError` on any match.
 4. **Competitive-game stratification (Q1/Q2/Q3/Q4 by abs(Δrating)) computed before any Phase 7 work.** Tracked via `ReleaseMetadata.stratification_computed`. Q1 is the high-rating-gap (likely blowout) quartile; Q4 is the toss-up quartile.
+
+### Mechanism-verification rule for "smoking gun" / "data drift" claims (added 2026-05-27)
+
+Binding on every Phase report, every methodology disclosure, every external claims doc, and every internal phase-completion writeup that attributes an observed metric anomaly to a data-quality condition (NULL share, coverage gap, missing source, schema shift).
+
+Before publishing a claim of that form, the report MUST include all four verification lines:
+
+1. **Identify the specific code path that uses the data in question.** Grep result + file:line reference.
+2. **Show evidence (code reference + value flow) that the data actually affects model predictions through that path.** Not the audit layer, not display logic, not fallback-only paths unless quantified as the dominant source.
+3. **Quantify the maximum possible impact.** Form: "this affects at most N games out of M, so the maximum effect on accuracy is K percentage points."
+4. **Confirm the maximum impact is consistent with the observed anomaly.** If the maximum impact (step 3) is materially smaller than the observed effect, the data condition cannot be the cause — walk the claim back in the same report.
+
+Failed verifications walk back IN THE SAME report, not as a follow-up correction. This rule exists because two retracted "smoking gun" framings in five phases (Phase 1 75.5% football number; Phase 4b Boys Soccer 100%-NULL division) followed the same pattern: striking fact → causal story → smoking-gun label → mechanism check at later phase → retraction. The check must precede the label.
+
+See `claude-memory/apps/preprank/decisions.md` 2026-05-27 "Mechanism-verification rule for 'smoking gun' / 'data drift' claims" for the originating context and the rule's verbatim form.
 
 ### Code-level enforcement points
 

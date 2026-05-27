@@ -12,6 +12,11 @@ from .margin import (
     precompute_team_week_margins,
     team_margin_signal,
 )
+from .log_margin import (
+    log_compressed_margin,
+    precompute_team_week_log_margins,
+    team_log_margin_signal,
+)
 from .recent_form import (
     game_recency_weight,
     precompute_team_week_form,
@@ -30,6 +35,9 @@ __all__ = [
     "capped_margin",
     "team_margin_signal",
     "precompute_team_week_margins",
+    "log_compressed_margin",
+    "team_log_margin_signal",
+    "precompute_team_week_log_margins",
     "game_recency_weight",
     "team_form_signal",
     "precompute_team_week_form",
