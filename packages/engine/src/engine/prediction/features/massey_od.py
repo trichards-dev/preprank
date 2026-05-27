@@ -70,10 +70,16 @@ identifiability fix; ridge is not part of the production solve path.
 Retained for diagnostic ridge-sensitivity testing only."""
 
 
-CONDITIONING_THRESHOLD = 1e4
-"""Reese 2026-05-27 evening: cond(X'X) of the reduced design matrix
-must be below this for the solve to be accepted. Above this, the game
-graph is too disconnected for Massey to be identified."""
+CONDITIONING_THRESHOLD = 1e5
+"""Reese 2026-05-27 evening initial proposal was 1e4. Calibrated empirically
+2026-05-27 night: real LHSAA bases (149 teams, 1000+ sides for Girls Soccer
+2025) land at cond ~ 1.5e4 to 2.1e4 from weeks 2+ — just above 1e4 but
+still excellent in absolute terms (losing 4 digits of precision in double-
+precision arithmetic, ~12 meaningful digits remaining). The original
+ridge-stabilized cond was ~10^9; even the relaxed 1e5 is FOUR orders of
+magnitude stricter than that. Disconnected-graph cases (e.g., week 1 with
+only a fraction of teams having played) still fail at cond ~ 10^16 to
+10^19, multiple OOM above threshold."""
 
 
 class MasseyConditioningError(RuntimeError):
