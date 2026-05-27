@@ -195,16 +195,19 @@ def test_woodlawn_br_canonical_resolves_via_exact_match():
 # ---------------------------------------------------------------------------
 # Pending-verification cases — flagged for review, NOT auto-resolved
 # ---------------------------------------------------------------------------
-def test_mentorship_academy_is_pending_not_auto_resolved():
-    """Mentorship Academy (3A, Baton Rouge) may or may not be the same
-    school as Helix Mentorship Academy (4A, Baton Rouge). Until manual
-    verification confirms, the resolver does NOT auto-link them."""
+def test_mentorship_academy_resolves_to_helix_post_verification():
+    """Mentorship Academy (LHSAA canonical, 3A, Baton Rouge) resolves to
+    Helix Mentorship Academy (DB id=222) per the 2026-05-27 web-search +
+    LHSAA directory verification: same school, rebranded over time
+    (Mentorship Academy → Helix Mentorship STEAM/Maritime Academy)."""
     db_schools = [
         {"id": 222, "name": "Helix Mentorship Academy", "classification": "4A"},
     ]
     result = resolve_school("Mentorship Academy", db_schools)
-    assert result is None
-    assert is_pending_verification("Mentorship Academy")
+    assert result is not None
+    assert result["id"] == 222
+    # No longer in PENDING_MANUAL_VERIFICATION after resolution
+    assert not is_pending_verification("Mentorship Academy")
 
 
 # ---------------------------------------------------------------------------
@@ -243,15 +246,13 @@ def test_list_fuzzy_candidates_flags_known_false_positives():
     assert "Verified" in candidates[0]["false_positive_reason"] or "Distinct" in candidates[0]["false_positive_reason"]
 
 
-def test_list_fuzzy_candidates_flags_pending_verification():
-    """Mentorship Academy is flagged pending-verification when surfacing
-    fuzzy candidates."""
-    db_schools = [
-        {"id": 222, "name": "Helix Mentorship Academy", "classification": "4A"},
-    ]
-    candidates = list_fuzzy_candidates("Mentorship Academy", db_schools)
-    assert len(candidates) >= 1
-    assert candidates[0]["canonical_pending_verification"] is True
+def test_list_fuzzy_candidates_pending_verification_dict_is_empty_after_mentorship_resolved():
+    """After Mentorship Academy was resolved 2026-05-27, the
+    PENDING_MANUAL_VERIFICATION dict is empty. The pending-flag
+    plumbing is still tested at the unit level (it just has no live
+    cases to surface today). This test documents that state."""
+    from engine.data.school_aliases import PENDING_MANUAL_VERIFICATION
+    assert PENDING_MANUAL_VERIFICATION == {}
 
 
 # ---------------------------------------------------------------------------

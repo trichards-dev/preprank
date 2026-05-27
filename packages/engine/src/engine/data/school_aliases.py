@@ -33,9 +33,11 @@ Of 6 fuzzy candidates ≥ 0.75 identified in the B0 1A-5A subset:
   3. David Thibodaux (4A, Lafayette) vs Thibodaux (5A, Thibodaux)
      → FALSE POSITIVE. Two distinct LHSAA member schools.
   4. Mentorship Academy (3A, Baton Rouge) vs Helix Mentorship Academy
-     (4A, Baton Rouge) → UNRESOLVED. May be related (rebrand/sister
-     school) or distinct; needs LHSAA contact for confirmation. NOT
-     auto-aliased. Listed as a manual-verification item.
+     (4A, Baton Rouge) → CONFIRMED ALIAS (resolved 2026-05-27 via web
+     search). Same school — opened 2011 as "Mentorship Academy" and
+     rebranded as "Helix Mentorship Academy" / "Helix Mentorship STEAM
+     Academy" / "Helix Mentorship & Maritime Academy." Shared physical
+     address, mascot, LHSAA District 7-3A. Added to EXPLICIT_ALIASES.
   5. River Oaks (1A, Monroe) vs Live Oak (5A, Watson)
      → FALSE POSITIVE. Wildly different schools (1A rural vs 5A urban).
   6. St. Helena College and Career Acad. (2A, Greensburg) vs
@@ -63,6 +65,18 @@ EXPLICIT_ALIASES: dict[str, int] = {
     # Same institution; canonical uses "and", DB uses "&"; class diff
     # is a 1-level seasonal shift consistent with LHSAA reclassifications.
     "st helena college and career acad": 98,
+    # Mentorship Academy (LHSAA canonical, 3A, Baton Rouge) →
+    # Helix Mentorship Academy (DB id=222, classification 4A).
+    # Same institution — opened in 2011 as "Mentorship Academy" and
+    # rebranded subsequently as "Helix Mentorship Academy" /
+    # "Helix Mentorship STEAM Academy" / "Helix Mentorship & Maritime
+    # Academy." Shares physical address (339 Florida Street, Baton Rouge),
+    # mascot (Sharks), and Facebook handle (mentorshipbr). LHSAA District
+    # 7-3A. Resolved 2026-05-27 via web search + LHSAA member directory
+    # cross-reference (Workstream B1.2a). The canonical CSV has BOTH
+    # entries listed (legacy + rebranded names), confirming the duplicate-
+    # entry pattern.
+    "mentorship academy": 222,
 }
 
 
@@ -80,9 +94,8 @@ KNOWN_FALSE_POSITIVES: dict[str, str] = {
 
 # Schools that need manual verification before being added to the alias
 # table. Listed here for human review tracking. Not auto-resolved.
-PENDING_MANUAL_VERIFICATION: dict[str, str] = {
-    "mentorship academy": "Possibly related to Helix Mentorship Academy (same city, similar name). LHSAA contact needed to confirm same/distinct institution.",
-}
+# Empty for now — Mentorship Academy was resolved to id=222 on 2026-05-27.
+PENDING_MANUAL_VERIFICATION: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
