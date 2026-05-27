@@ -89,7 +89,13 @@ matchup(team_X_off, team_Y_def) = X_off_strength + Y_def_weakness
 Δf_offdef(g) = matchup(h_off, a_def) − matchup(a_off, h_def)
 ```
 
-Computed as of the end of week *w-1*. Cold-start handling per the dedicated section below. Reference implementation lands in `prediction/features/massey_od.py` during Phase 4d.
+Computed as of the end of week *w-1*. Cold-start handling per the dedicated section below. Reference implementation: `prediction/features/massey_od.py` (landed 2026-05-27).
+
+**Identifiability via explicit reparameterization (added 2026-05-27 after first-run M3 conditioning flag):** The unconstrained `(α, o_i, d_i)` parameterization has a 2-DOF translation degeneracy — `(α + c, o − c, d)` and `(α + c, o, d − c)` both leave predictions unchanged. The first Phase 4d implementation used a tiny ridge (1e-6) to stabilize, but cond(X'X) measured ~10^9 on Girls Soccer 2025 weeks; the ridge was picking an arbitrary point in the null-space. The current implementation **drops the reference team's `o` AND `d` columns** from the LS design matrix (reference = lowest team_id in the basis, deterministic). The reduced parameterization is full-rank when the game graph is connected. Post-solve, all o's and d's are centered to zero mean with the shift absorbed into α, so the spec contract (offense = points above league mean, defense = points allowed above league mean) still holds.
+
+**Conditioning guardrail (binding):** the reduced design matrix must satisfy `cond(X'X) < 1e4` for the solve to be accepted. Above the threshold (e.g., disconnected game graph at very early weeks), `MasseyConditioningError` is raised; the precompute SKIPS that week's entries rather than emitting unidentified ratings. The runner's `signals.get((team, w-1), (0.0, 0.0))` fallback handles the gap as cold-start, which is the correct behavior under identifiability failure.
+
+**β₄ disposition pending** (Phase 4d re-run + audit cycle in progress on the corrected universe). The first Phase 4d run on the original (unfixed) Massey implementation produced 8/8 sports >2pp lift, which triggered the standard replay audit. The audit surfaced the M3 conditioning flag (cond ~10^9), leading to the structural fix above. Re-run with the centered implementation is the deferred work; β₄'s permanent disposition is set after that and the Workstream B universe-expansion re-validation pass clears. See `claude-memory/apps/preprank/decisions.md` 2026-05-27 entries for the chronology.
 
 #### Δf_pyc — prior-year carryover (Phase 4e)
 

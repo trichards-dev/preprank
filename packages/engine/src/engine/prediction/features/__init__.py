@@ -17,6 +17,9 @@ from .log_margin import (
     precompute_team_week_log_margins,
     team_log_margin_signal,
 )
+from .massey_od import (
+    precompute_team_week_massey_od,
+)
 from .recent_form import (
     game_recency_weight,
     precompute_team_week_form,
@@ -38,6 +41,7 @@ __all__ = [
     "log_compressed_margin",
     "team_log_margin_signal",
     "precompute_team_week_log_margins",
+    "precompute_team_week_massey_od",
     "game_recency_weight",
     "team_form_signal",
     "precompute_team_week_form",
