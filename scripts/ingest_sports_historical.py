@@ -471,7 +471,7 @@ def calculate_and_store_ratings(sb, cfg: SportConfig, season_year: int,
     team_info = {r["id"]: r for r in teams_res.data}
 
     school_ids = list({r["school_id"] for r in teams_res.data})
-    schools_res = sb.table("schools").select("id,name,classification") \
+    schools_res = sb.table("schools").select("id,name,classification,parish") \
                     .in_("id", school_ids).execute()
     school_info = {r["id"]: r for r in schools_res.data}
 
@@ -479,6 +479,16 @@ def calculate_and_store_ratings(sb, cfg: SportConfig, season_year: int,
     for tid, ti in team_info.items():
         sid = ti["school_id"]
         sch = school_info.get(sid, {})
+        # 2026-05-28 (Reese B1.2b post-mortem, Option B): OOS schools have
+        # parish like 'OOS-XX' and classification=NULL. Their games are
+        # already filtered out of game_results below. Skip them here so
+        # they never enter team_records — otherwise the NULL classification
+        # crashes TeamRecord pydantic validation.
+        # Belt-and-suspenders: also catches in-state placeholder rows with
+        # NULL classification (e.g., "Applied for Membership" entries) that
+        # would still crash pydantic on the same NULL-classification door.
+        if (sch.get("parish") or "").startswith("OOS") or not sch.get("classification"):
+            continue
         # 2026-05-25: teams.division comes from refresh_team_divisions.py
         # (PDFs as source of truth). Fall back to "I" only for engine
         # bracketing when the team is uncovered by any PDF — does NOT
@@ -550,8 +560,15 @@ def calculate_and_store_ratings(sb, cfg: SportConfig, season_year: int,
 
     print(f"  Upserting {len(payload)} power rating rows...")
     for i in range(0, len(payload), 200):
+        # 2026-05-28 (Workstream B1.2b post-mortem): on_conflict columns MUST
+        # match power_ratings.uq_power_ratings_team_week_season_source_snapshot
+        # at apps/api/app/models.py PowerRating.__table_args__ (5 columns,
+        # NULLS NOT DISTINCT). Engine path writes source='engine' + snapshot_date=NULL;
+        # the NULLS NOT DISTINCT semantics make engine reruns upsert in place.
+        # CI enforcement: test_b1_2b_bundle.test_power_ratings_constraint_columns_match_scraper_on_conflict.
         sb.table("power_ratings").upsert(
-            payload[i:i+200], on_conflict="team_id,week_number,season_year"
+            payload[i:i+200],
+            on_conflict="team_id,week_number,season_year,source,snapshot_date",
         ).execute()
     top = sorted(payload, key=lambda x: x["power_rating"], reverse=True)[:3]
     print(f"  Done. Top 3: {[(r['team_id'], r['power_rating']) for r in top]}")
@@ -698,9 +715,21 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
                 print(f"  Inserting in batches...")
                 for i in range(0, len(games_to_insert), 200):
                     chunk = games_to_insert[i:i+200]
-                    sb.table("games").insert(chunk).execute()
+                    # 2026-05-28 (Workstream B1.2b): upsert (not insert) so the
+                    # scraper is idempotent against the games unique constraint.
+                    # on_conflict columns MUST match the constraint at
+                    # apps/api/app/models.py Game.__table_args__ (uq_games_matchup)
+                    # and migration dc98fac605a9. Drift = silent no-op corruption.
+                    # CI enforcement: test_b1_2b_bundle.test_constraint_columns_match_scraper_on_conflict.
+                    sb.table("games").upsert(
+                        chunk,
+                        on_conflict="home_team_id,away_team_id,sport_id,season_year,game_date",
+                    ).execute()
                 total_inserted += len(games_to_insert)
-                print(f"  Season {season_year}: {len(games_to_insert)} games inserted.")
+                # Count is rows-attempted, not new-rows-created. On idempotent
+                # re-runs this number stays the same but the DB row count won't grow.
+                print(f"  Season {season_year}: {len(games_to_insert)} games upsert-attempted "
+                      f"(existing rows update in place via uq_games_matchup).")
 
             if not skip_ratings:
                 calculate_and_store_ratings(sb, cfg, season_year, team_cache, dry_run)

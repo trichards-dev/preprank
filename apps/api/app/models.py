@@ -88,6 +88,17 @@ class Game(Base):
     home_team = relationship("Team", foreign_keys=[home_team_id], back_populates="home_games")
     away_team = relationship("Team", foreign_keys=[away_team_id], back_populates="away_games")
 
+    # 2026-05-28 (Workstream B1.2b cleanup): one game per matchup-per-day.
+    # The scraper upsert at scripts/ingest_sports_historical.py uses the
+    # SAME column list as the on_conflict target. Keep them in sync.
+    # See migration: alembic/versions/dc98fac605a9_add_games_unique_constraint.py
+    __table_args__ = (
+        UniqueConstraint(
+            "home_team_id", "away_team_id", "sport_id", "season_year", "game_date",
+            name="uq_games_matchup",
+        ),
+    )
+
 
 class PowerRating(Base):
     __tablename__ = "power_ratings"
@@ -105,6 +116,24 @@ class PowerRating(Base):
     calculated_at = Column(DateTime, server_default=func.now())
 
     team = relationship("Team", back_populates="power_ratings")
+
+    # 2026-05-28 (Workstream B1.2b post-mortem): one rating row per
+    # (team, week, season, source, snapshot_date). The LHSAA-official loader
+    # writes time-series snapshots per publication date (distinct snapshot_date
+    # per row), while the engine path writes a single row with snapshot_date=NULL.
+    # NULLS NOT DISTINCT (PG15+) makes the engine path idempotent on rerun by
+    # treating NULL=NULL — without it, repeated engine writes would slip through.
+    # The scraper upsert at scripts/ingest_sports_historical.py uses the SAME
+    # 5-column on_conflict list; CI-enforced by
+    # test_b1_2b_bundle.test_power_ratings_constraint_columns_match_scraper_on_conflict.
+    # See migration alembic/versions/<id>_add_power_ratings_unique_constraint.py
+    __table_args__ = (
+        UniqueConstraint(
+            "team_id", "week_number", "season_year", "source", "snapshot_date",
+            name="uq_power_ratings_team_week_season_source_snapshot",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
 
 
 class Simulation(Base):
