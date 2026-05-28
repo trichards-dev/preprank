@@ -195,6 +195,20 @@ def test_woodlawn_br_canonical_resolves_via_exact_match():
 # ---------------------------------------------------------------------------
 # Pending-verification cases — flagged for review, NOT auto-resolved
 # ---------------------------------------------------------------------------
+def test_cohen_college_prep_resolves_to_walter_l_cohen_post_verification():
+    """Cohen College Prep (LHSAA canonical, 1A, NOLA) resolves to
+    Walter L. Cohen (DB id=252) per the 2026-05-27 Investigation 1
+    verification: school operates as 'Walter L. Cohen College Prep',
+    canonical xlsx records 'Cohen College Prep', lhsaaonline records
+    'Walter L. Cohen'."""
+    db_schools = [
+        {"id": 252, "name": "Walter L. Cohen", "classification": "3A"},
+    ]
+    result = resolve_school("Cohen College Prep", db_schools)
+    assert result is not None
+    assert result["id"] == 252
+
+
 def test_mentorship_academy_resolves_to_helix_post_verification():
     """Mentorship Academy (LHSAA canonical, 3A, Baton Rouge) resolves to
     Helix Mentorship Academy (DB id=222) per the 2026-05-27 web-search +

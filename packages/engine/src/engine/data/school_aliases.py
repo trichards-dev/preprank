@@ -77,6 +77,17 @@ EXPLICIT_ALIASES: dict[str, int] = {
     # entries listed (legacy + rebranded names), confirming the duplicate-
     # entry pattern.
     "mentorship academy": 222,
+    # Cohen College Prep (LHSAA canonical, 1A, New Orleans) →
+    # Walter L. Cohen (DB id=252, classification 3A).
+    # Same school — canonical xlsx uses the rebranded "Cohen College Prep"
+    # name (school operates as "Walter L. Cohen College Prep"); lhsaaonline
+    # records it under the legacy "Walter L. Cohen" form. Resolved
+    # 2026-05-27 via direct lhsaaonline search across all classifications
+    # in BBB 2024: "Walter L. Cohen" appears as the SCHOOL column value,
+    # no "Cohen College Prep" variant exists in lhsaaonline data.
+    # Class diff (1A canonical vs 3A DB) reflects a between-season
+    # classification shift, same pattern as St. Helena + Mentorship.
+    "cohen college prep": 252,
 }
 
 
