@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import schools, teams, games, ratings, simulations, auth, subscriptions, favorites, pickem, share, hype, scenarios, admin_replay
+from app.routers import schools, teams, games, ratings, simulations, auth, subscriptions, favorites, pickem, share, hype, scenarios, admin_replay, forecast
 
 app = FastAPI(
     title="PrepRank API",
@@ -21,6 +21,7 @@ app.add_middleware(
 app.include_router(schools.router, prefix="/api/v1/schools", tags=["schools"])
 app.include_router(teams.router, prefix="/api/v1/teams", tags=["teams"])
 app.include_router(games.router, prefix="/api/v1/games", tags=["games"])
+app.include_router(forecast.router, prefix="/api/v1/games", tags=["forecast"])
 app.include_router(ratings.router, prefix="/api/v1/ratings", tags=["ratings"])
 app.include_router(simulations.router, prefix="/api/v1/simulations", tags=["simulations"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
