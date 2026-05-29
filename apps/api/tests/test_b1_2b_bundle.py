@@ -23,6 +23,7 @@ and skip if env vars aren't set.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import re
 import sys
@@ -353,6 +354,92 @@ def test_post_resolution_dedup_richness_picker_score_dominates_metadata():
     assert len(deduped) == 1
     assert deduped[0]["home_score"] == 5, \
         "Score completeness must beat metadata richness when they conflict"
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator tests — NO DB required.
+#
+# scripts/workstream_b1_2b_run.py is the discipline wrapper that drove the
+# full B1.2b run (35 sport-seasons) and the B1.2c football smoke (2 runs).
+# These tests pin three load-bearing helpers so refactors don't silently
+# break the production tool.
+# ---------------------------------------------------------------------------
+def test_orchestrator_load_checkpoint_returns_empty_template_when_missing(
+    tmp_path, monkeypatch,
+):
+    """load_checkpoint() must return the empty template shape (started_utc,
+    last_update_utc=None, cells={}, per_sport_summary={}) when the on-disk
+    file doesn't exist yet. Production behavior — first run of the
+    orchestrator always hits this path."""
+    import scripts.workstream_b1_2b_run as orch
+    nonexistent = tmp_path / "no_such_checkpoint.json"
+    monkeypatch.setattr(orch, "CHECKPOINT_PATH", nonexistent)
+
+    ckpt = orch.load_checkpoint()
+
+    assert set(ckpt.keys()) == {"started_utc", "last_update_utc", "cells", "per_sport_summary"}
+    assert ckpt["last_update_utc"] is None
+    assert ckpt["cells"] == {}
+    assert ckpt["per_sport_summary"] == {}
+    assert isinstance(ckpt["started_utc"], str) and ckpt["started_utc"].endswith("Z")
+
+
+def test_orchestrator_save_checkpoint_writes_valid_json_with_timestamp(
+    tmp_path, monkeypatch,
+):
+    """save_checkpoint() must (a) write valid JSON parseable on a re-read,
+    (b) stamp last_update_utc with an ISO 'Z'-suffixed timestamp on every
+    write. Used at every per-sport boundary in production."""
+    import scripts.workstream_b1_2b_run as orch
+    target = tmp_path / "subdir" / "checkpoint.json"   # parent doesn't exist — exercise mkdir
+    monkeypatch.setattr(orch, "CHECKPOINT_PATH", target)
+
+    ckpt = {
+        "started_utc": "2026-05-28T22:08:01Z",
+        "last_update_utc": None,
+        "cells": {},
+        "per_sport_summary": {"Softball": {"sport": "Softball", "status": "complete"}},
+    }
+    orch.save_checkpoint(ckpt)
+
+    # Round-trip
+    on_disk = json.loads(target.read_text())
+    assert on_disk["per_sport_summary"]["Softball"]["status"] == "complete"
+    assert on_disk["last_update_utc"] is not None
+    assert isinstance(on_disk["last_update_utc"], str)
+    assert on_disk["last_update_utc"].endswith("Z")
+
+
+def test_orchestrator_missing_schools_filters_by_classification_and_resolver():
+    """missing_schools_for_sport() must (a) filter by 1A-5A classification
+    (so B/C-class schools don't get pre-inserted), and (b) skip schools the
+    B1.1 resolver already maps to an existing DB row (so aliases don't
+    produce duplicate inserts)."""
+    import scripts.workstream_b1_2b_run as orch
+
+    participation = {
+        "participation": {
+            "Softball": [
+                {"school": "Lafayette", "city": "Lafayette", "classification": "5A"},        # already in DB → skip
+                {"school": "Some New School", "city": "Anywhere", "classification": "3A"},   # missing → include
+                {"school": "Tiny B-Class School", "city": "Rural", "classification": "B"},   # B-class → skip
+                {"school": "Smaller C-Class", "city": "Rural", "classification": "C"},       # C-class → skip
+                # Alias case: input "St. Helena College and Career Acad." but DB has the '&' variant
+                {"school": "St. Helena College and Career Acad.", "city": "Greensburg", "classification": "3A"},
+            ],
+        },
+    }
+    db_schools = [
+        {"id": 1, "name": "Lafayette", "classification": "5A"},
+        {"id": 98, "name": "St. Helena College & Career Acad.", "classification": "3A"},
+    ]
+
+    missing = orch.missing_schools_for_sport(participation, "Softball", db_schools)
+
+    # Only one truly-missing 1A-5A school should remain
+    assert len(missing) == 1
+    assert missing[0]["school"] == "Some New School"
+    assert missing[0]["classification"] == "3A"
 
 
 # ---------------------------------------------------------------------------
