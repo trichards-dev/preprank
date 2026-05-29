@@ -1790,3 +1790,298 @@ def run_phase5_stratification(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 — calibration + per-decile reliability audit
+# ---------------------------------------------------------------------------
+# Per decisions.md 2026-05-26 launch-date lock: Phase 6 is the gate for
+# engine candidate-final. The auto-slip rule (Sept 1 → Sept 15) fires on
+# "uncorrectable tail miscalibration after Phase 6 isotonic recalibration"
+# (decisions.md 2026-05-26 evening Phase 6 framing correction).
+#
+# Acceptance criteria (per sport):
+#   - slope ∈ [0.85, 1.15]
+#   - max |mean_predicted - mean_observed| ≤ 0.05 per decile bin
+#     (bins with n_games >= 10 only — small bins are noise)
+#   - Post-isotonic-recalibration reassessment if needs_recalibration fires
+#
+# Phase 6 is descriptive + corrective. No FDR. The output decides
+# engine candidate-final state vs auto-slip trigger.
+PHASE6_PINNED_INDICES = (3,)                # same fit config as Phase 5
+PHASE6_SLOPE_BAND: tuple[float, float] = (0.85, 1.15)
+PHASE6_MAX_BIN_GAP: float = 0.05
+PHASE6_MIN_BIN_N: int = 10                  # ignore tiny bins (pure noise)
+
+
+@dataclass
+class Phase6BinReliability:
+    """Per-decile-bin reliability measurement."""
+    bin_lower: float
+    bin_upper: float
+    mean_predicted: float
+    mean_observed: float
+    n_games: int
+    abs_gap: float                          # |mean_predicted - mean_observed|, NaN-safe = 0 if empty
+    exceeds_max_gap: bool                   # abs_gap > PHASE6_MAX_BIN_GAP AND n_games >= PHASE6_MIN_BIN_N
+
+
+@dataclass
+class Phase6SportResult:
+    sport: str
+    fit: FitResult
+    n_holdout: int
+    overall_accuracy: float
+    overall_brier: float
+    raw_slope: float
+    raw_intercept: float
+    raw_slope_in_band: bool
+    raw_bins: list[Phase6BinReliability] = field(default_factory=list)
+    raw_n_bins_exceeding_gap: int = 0
+    # Post-isotonic (only populated when isotonic_applied=True)
+    isotonic_applied: bool = False
+    isotonic_slope: float = 0.0
+    isotonic_intercept: float = 0.0
+    isotonic_slope_in_band: bool = False
+    isotonic_bins: list[Phase6BinReliability] = field(default_factory=list)
+    isotonic_n_bins_exceeding_gap: int = 0
+    # Verdict
+    passes_acceptance: bool = False         # both slope-in-band AND no exceeding bins on the final state
+
+
+@dataclass
+class Phase6Result:
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, Phase6SportResult] = field(default_factory=dict)
+    n_passing: int = 0
+    n_failing: int = 0
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+def _bins_to_phase6(bins: list[dict]) -> tuple[list[Phase6BinReliability], int]:
+    """Convert metrics.reliability_bins output to Phase6BinReliability list.
+
+    Returns (per_bin_list, n_exceeding) where n_exceeding counts bins
+    with abs_gap > PHASE6_MAX_BIN_GAP AND n_games >= PHASE6_MIN_BIN_N.
+    """
+    out: list[Phase6BinReliability] = []
+    n_exceeding = 0
+    for b in bins:
+        n = int(b.get("n_games", 0))
+        mp = b.get("mean_predicted")
+        mo = b.get("mean_observed")
+        if n == 0 or mp is None or mo is None or (isinstance(mp, float) and (mp != mp)):
+            # Empty or NaN — record but don't flag
+            out.append(Phase6BinReliability(
+                bin_lower=float(b["bin_lower"]),
+                bin_upper=float(b["bin_upper"]),
+                mean_predicted=float("nan"),
+                mean_observed=float("nan"),
+                n_games=n,
+                abs_gap=0.0,
+                exceeds_max_gap=False,
+            ))
+            continue
+        gap = abs(float(mp) - float(mo))
+        exceed = (gap > PHASE6_MAX_BIN_GAP) and (n >= PHASE6_MIN_BIN_N)
+        if exceed:
+            n_exceeding += 1
+        out.append(Phase6BinReliability(
+            bin_lower=float(b["bin_lower"]),
+            bin_upper=float(b["bin_upper"]),
+            mean_predicted=float(mp),
+            mean_observed=float(mo),
+            n_games=n,
+            abs_gap=gap,
+            exceeds_max_gap=exceed,
+        ))
+    return out, n_exceeding
+
+
+def run_phase6_calibration(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-phase6-calibration",
+    n_bins: int = 10,
+    seed: int = 42,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase6Result:
+    """Phase 6: per-sport calibration audit + per-decile reliability check.
+
+    For each sport:
+      1. Fit (β₃ pinned; rest free) on train, predict on holdout
+      2. Compute raw calibration slope + intercept
+      3. Compute raw per-decile reliability bins
+      4. If slope outside [0.85, 1.15] OR any bin |gap| > 0.05 with n≥10
+         → fit isotonic recalibration on holdout, re-compute slope + bins
+      5. PASS if final-state slope-in-band AND zero bins exceed gap
+    """
+    from .calibration import (
+        IsotonicRegressor,
+        calibration_slope_intercept,
+        needs_recalibration,
+    )
+
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    rf_config = _PredictionConfig()
+
+    result = Phase6Result(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+
+        inputs_list: list[RunInputs] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_list.append(load_run_inputs(sb, sid, sport_name, season, teams=teams))
+
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inp in inputs_list:
+            form_table = precompute_team_week_form(inp.games, sport_name, rf_config)
+            log_margin_table = precompute_team_week_log_margins(inp.games)
+            massey_table = precompute_team_week_massey_od(inp.games)
+            rows = _build_training_rows(
+                inp,
+                recent_form_signals=form_table,
+                log_margin_signals=log_margin_table,
+                massey_od_signals=massey_table,
+            )
+            if inp.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows or not hold_rows:
+            result.fit_warnings.append(f"{sport_name}: insufficient rows — skipped")
+            continue
+
+        try:
+            fit = fit_sport(
+                sport_name, train_rows, cv_seed=seed,
+                fixed_indices=list(PHASE6_PINNED_INDICES),
+            )
+        except Exception as e:
+            result.fit_warnings.append(
+                f"{sport_name}: fit raised {type(e).__name__}: {e}"
+            )
+            continue
+
+        if not fit.converged:
+            result.fit_warnings.append(f"{sport_name}: fit did not converge cleanly")
+
+        config = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit.coefficients}
+        )
+        preds = _predict_rows(hold_rows, sport_name, config)
+        if not preds:
+            continue
+
+        from .metrics import reliability_bins as _reliability_bins
+
+        preds_probs = [p.home_win_probability for p in preds]
+        preds_actuals = [1 if p.actual_home_won else 0 for p in preds]
+
+        raw_cal = calibration_slope_intercept(preds_probs, preds_actuals)
+        raw_bins_raw = _reliability_bins(preds, n_bins=n_bins)
+        raw_bins, raw_exceed = _bins_to_phase6(raw_bins_raw)
+        raw_in_band = (PHASE6_SLOPE_BAND[0] <= raw_cal.slope <= PHASE6_SLOPE_BAND[1])
+
+        sport_result = Phase6SportResult(
+            sport=sport_name,
+            fit=fit,
+            n_holdout=len(preds),
+            overall_accuracy=game_winner_accuracy(preds),
+            overall_brier=brier_score(preds),
+            raw_slope=raw_cal.slope,
+            raw_intercept=raw_cal.intercept,
+            raw_slope_in_band=raw_in_band,
+            raw_bins=raw_bins,
+            raw_n_bins_exceeding_gap=raw_exceed,
+        )
+
+        needs_iso = needs_recalibration(raw_cal, slope_band=PHASE6_SLOPE_BAND) or (raw_exceed > 0)
+
+        if needs_iso:
+            sport_result.isotonic_applied = True
+            iso = IsotonicRegressor.fit(preds_probs, preds_actuals)
+            iso_probs = iso.transform(preds_probs)
+
+            # Re-derive PredictionRecords with recalibrated home_win_probability
+            from .predictor import PredictionRecord as _PR
+            recal_preds: list[PredictionRecord] = []
+            for orig, new_p in zip(preds, iso_probs):
+                recal_preds.append(_PR(
+                    game_id=orig.game_id,
+                    home_team_id=orig.home_team_id,
+                    away_team_id=orig.away_team_id,
+                    home_win_probability=float(new_p),
+                    predicted_home_score=orig.predicted_home_score,
+                    predicted_away_score=orig.predicted_away_score,
+                    predicted_spread=orig.predicted_spread,
+                    home_rating_pregame=orig.home_rating_pregame,
+                    away_rating_pregame=orig.away_rating_pregame,
+                    home_cold_start=orig.home_cold_start,
+                    away_cold_start=orig.away_cold_start,
+                    actual_home_won=orig.actual_home_won,
+                    sport=orig.sport,
+                    season_year=orig.season_year,
+                    week_number=orig.week_number,
+                ))
+            iso_cal = calibration_slope_intercept(iso_probs, preds_actuals)
+            iso_bins_raw = _reliability_bins(recal_preds, n_bins=n_bins)
+            iso_bins, iso_exceed = _bins_to_phase6(iso_bins_raw)
+            iso_in_band = (PHASE6_SLOPE_BAND[0] <= iso_cal.slope <= PHASE6_SLOPE_BAND[1])
+
+            sport_result.isotonic_slope = iso_cal.slope
+            sport_result.isotonic_intercept = iso_cal.intercept
+            sport_result.isotonic_slope_in_band = iso_in_band
+            sport_result.isotonic_bins = iso_bins
+            sport_result.isotonic_n_bins_exceeding_gap = iso_exceed
+
+            sport_result.passes_acceptance = iso_in_band and (iso_exceed == 0)
+        else:
+            sport_result.passes_acceptance = raw_in_band and (raw_exceed == 0)
+
+        result.sports[sport_name] = sport_result
+        if sport_result.passes_acceptance:
+            result.n_passing += 1
+        else:
+            result.n_failing += 1
+
+    return result
