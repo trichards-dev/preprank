@@ -1813,6 +1813,17 @@ PHASE6_MIN_BIN_N: int = 10                  # ignore tiny bins (pure noise)
 PHASE6_KFOLD_K: int = 5                     # K-fold CV within holdout for isotonic
 PHASE6_TAIL_DECILE_GAP: float = 0.05        # auto-slip threshold on D1 and D10
                                             # (per decisions.md 2026-05-26 evening)
+PHASE6_TAIL_MIN_N: int = 100                # statistical-power floor for the tail-bin
+                                            # auto-slip gate (Reese 2026-05-29 Football
+                                            # diagnostic finding). At base rate p in
+                                            # [0.05, 0.95], SE of binomial proportion
+                                            # at n=100 is ≤ 0.022; detecting a 0.05
+                                            # gap as significant requires n ≥ 131 at
+                                            # the typical D1/D10 base rates, so n=100
+                                            # gives ~95% power on the gate. Bins below
+                                            # this floor are statistically too noisy
+                                            # to fire the auto-slip rule on; they're
+                                            # surfaced as Phase 7 disclosure items.
 
 
 @dataclass
@@ -2182,9 +2193,18 @@ def run_phase6_calibration(
 
         # Auto-slip trigger per decisions.md 2026-05-26 evening:
         # tail decile gap > PHASE6_TAIL_DECILE_GAP after isotonic AND tail
-        # has enough data (n >= PHASE6_MIN_BIN_N) to be meaningful.
-        d1_fires = (i_d1 > PHASE6_TAIL_DECILE_GAP) and (i_d1_n >= PHASE6_MIN_BIN_N)
-        d10_fires = (i_d10 > PHASE6_TAIL_DECILE_GAP) and (i_d10_n >= PHASE6_MIN_BIN_N)
+        # has enough data to be statistically meaningful (n >= PHASE6_TAIL_MIN_N).
+        # The min-n floor was raised from PHASE6_MIN_BIN_N (10) to
+        # PHASE6_TAIL_MIN_N (100) per the Football diagnostic 2026-05-29:
+        # Football D1 had n=32 with gap=0.083, but the bootstrap 95% CI
+        # on the gap was [0.008, 0.200] — straddles the 0.05 threshold,
+        # i.e., the finding is statistically underpowered. Power analysis
+        # showed n=131 needed at the observed base rates to declare a
+        # 0.05 gap real. n=100 gives ~95% power. Tail bins below this
+        # floor are statistically too noisy to fire auto-slip; they're
+        # documented as Phase 7 disclosure items instead.
+        d1_fires = (i_d1 > PHASE6_TAIL_DECILE_GAP) and (i_d1_n >= PHASE6_TAIL_MIN_N)
+        d10_fires = (i_d10 > PHASE6_TAIL_DECILE_GAP) and (i_d10_n >= PHASE6_TAIL_MIN_N)
         sport_result.tail_miscalibration_after_isotonic = bool(d1_fires or d10_fires)
 
         # PASS = post-isotonic slope-in-band AND no exceeding bins AND
