@@ -1,15 +1,20 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
-// NOTE (2026-05-29): a new endpoint `GET /api/v1/games/{game_id}/forecast`
-// was added to the API in commit 40dfc16 (Phase 2 of the confidence-disclosure
-// UX workstream). It returns per-game home_win_probability + CI bounds +
+// NOTE (2026-05-29): `GET /api/v1/games/{game_id}/forecast` was added to
+// the API in commit 40dfc16 (Phase 2 of the confidence-disclosure UX
+// workstream). Endpoint shape: per-game home_win_probability + CI bounds +
 // confidence tier label + auth-conditional premium_detail block. This file
 // will gain a `fetchGameForecast()` helper + corresponding TypeScript types
 // when the Phase 3 web layer kicks off after the week-1 engine checkpoint
 // (see claude-memory/apps/preprank/forecast_api_design_2026-05-29.md +
-// confidence_disclosure_ux_options_2026-05-29.md Spec 6). No consumer code
-// is changed in this Phase 2 commit; this comment confirms the contract
-// was reviewed.
+// confidence_disclosure_ux_options_2026-05-29.md Spec 6).
+//
+// AMENDMENT (2026-05-29 evening, commit 8d321e9): the forecast endpoint's
+// CI methodology changed from post-iso bin gap to binomial sampling CI
+// (Option D, approved by Reese; see decisions.md 2026-05-29 evening).
+// The API response shape is UNCHANGED — same fields, same types — only
+// the underlying CI computation differs. No web client work required for
+// this amendment; this comment confirms contract review.
 
 // --- Types ---
 
