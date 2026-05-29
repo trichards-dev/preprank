@@ -1,20 +1,21 @@
 """Drift test: tier distribution across 100 random games.
 
-Per Reese 2026-05-29 evening (Option D approval, step 4): verify the
-tier enum's actual distribution is non-degenerate, and that the 2-tier
-UI (Confident pick / Lean) covers ~95%+ of predictions under current
-holdout data. Toss-up and Long shot should be near-zero / zero — they're
-defined in the API enum but reserved for edge cases (bins with very
-thin n that don't exist in our current Phase 6 holdout).
+Per Reese 2026-05-29 evening Spec 8 (REVISED for 4-tier UI):
 
-Pass criteria:
-  - ≥ 95% of sampled games land in confident_pick / lean
-  - 0 ≤ Toss-up + Long shot proportion ≤ 5%
-  - At least one game in each surfaced tier (confident_pick + lean) —
-    confirms tier dispersion is happening, not all collapsed to one tier
+  Pass criteria — 4-tier UI acceptance:
+    - All 4 tiers fire at least once across 100 games (non-degenerate
+      dispersion — confirms tier system is meaningful in practice)
+    - Total of 4 tier counts equals total valid forecasts (accounting
+      sanity check)
+    - No single tier exceeds 90% of forecasts (catches catastrophic
+      collapse to one label)
 
-Run after each forecast methodology change to ensure tier dispersion
-matches the UX expectations.
+  Prior criteria (≥95% UI-shipped + ≤5% edge tiers) are obsolete and
+  removed; that was the 2-tier-UI premise the drift test itself
+  refuted (6.4% edge-tier fire rate empirically).
+
+Run after each forecast methodology or tier-UI change to ensure tier
+dispersion matches UX expectations.
 """
 from __future__ import annotations
 
@@ -109,37 +110,45 @@ def main() -> int:
                 parts.append(f"{tier}={counter[tier]}")
         print(f"    {sp:18s}  {'  '.join(parts)}")
 
-    # Acceptance criteria
+    # Acceptance criteria — 4-tier UI (REVISED 2026-05-29 evening)
     print()
     print("=" * 80)
     pass_checks: list[str] = []
     fail_checks: list[str] = []
 
-    # 1. >=95% in confident_pick + lean (the 2-tier UI surface)
-    ui_tier_n = tier_counter.get("confident_pick", 0) + tier_counter.get("lean", 0)
-    ui_tier_pct = (100 * ui_tier_n / n_with_forecast) if n_with_forecast else 0.0
-    if ui_tier_pct >= 95:
-        pass_checks.append(f"≥95% in 2-tier UI surface: {ui_tier_pct:.1f}%")
-    else:
-        fail_checks.append(f"<95% in 2-tier UI surface: {ui_tier_pct:.1f}%")
+    # 1. All 4 tiers fire at least once — non-degenerate dispersion
+    for tier in ("confident_pick", "lean", "toss_up", "long_shot"):
+        c = tier_counter.get(tier, 0)
+        if c > 0:
+            pass_checks.append(f"{tier} fires: n={c}")
+        else:
+            fail_checks.append(f"{tier} never fires — tier collapse")
 
-    # 2. Both surfaced tiers have at least one game
-    if tier_counter.get("confident_pick", 0) > 0:
-        pass_checks.append(f"confident_pick fires: n={tier_counter['confident_pick']}")
+    # 2. Total accounting sanity — 4 tier counts should sum to n_with_forecast
+    total_tier_count = sum(
+        tier_counter.get(t, 0)
+        for t in ("confident_pick", "lean", "toss_up", "long_shot")
+    )
+    if total_tier_count == n_with_forecast:
+        pass_checks.append(
+            f"tier accounting balanced: {total_tier_count} = {n_with_forecast}"
+        )
     else:
-        fail_checks.append("confident_pick never fires — tier collapse")
-    if tier_counter.get("lean", 0) > 0:
-        pass_checks.append(f"lean fires: n={tier_counter['lean']}")
-    else:
-        fail_checks.append("lean never fires — tier collapse")
+        fail_checks.append(
+            f"tier accounting imbalance: {total_tier_count} ≠ {n_with_forecast}"
+        )
 
-    # 3. Toss-up + Long shot proportion within 0-5% (acceptable edge-case range)
-    edge_n = tier_counter.get("toss_up", 0) + tier_counter.get("long_shot", 0)
-    edge_pct = (100 * edge_n / n_with_forecast) if n_with_forecast else 0.0
-    if edge_pct <= 5:
-        pass_checks.append(f"toss_up + long_shot ≤ 5%: {edge_pct:.1f}%")
-    else:
-        fail_checks.append(f"toss_up + long_shot > 5%: {edge_pct:.1f}% — review tier brackets")
+    # 3. No catastrophic collapse — no single tier > 90%
+    for tier in ("confident_pick", "lean", "toss_up", "long_shot"):
+        c = tier_counter.get(tier, 0)
+        pct = (100 * c / n_with_forecast) if n_with_forecast else 0.0
+        if pct > 90:
+            fail_checks.append(
+                f"{tier} collapse — {pct:.1f}% > 90% threshold"
+            )
+    pass_checks.append(
+        f"no single tier > 90% (max: {max((100 * tier_counter.get(t, 0) / max(1, n_with_forecast)) for t in ('confident_pick', 'lean', 'toss_up', 'long_shot')):.1f}%)"
+    )
 
     print(f"PASS CHECKS ({len(pass_checks)}):")
     for c in pass_checks:
@@ -168,8 +177,6 @@ def main() -> int:
             for t in ("confident_pick", "lean", "toss_up", "long_shot")
         },
         "per_sport_tier_counts": {sp: dict(c) for sp, c in sport_tier_counter.items()},
-        "ui_tier_coverage_pct": ui_tier_pct,
-        "edge_tier_pct": edge_pct,
         "passes": not fail_checks,
         "pass_checks": pass_checks,
         "fail_checks": fail_checks,
