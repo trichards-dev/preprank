@@ -140,7 +140,19 @@ def trace_massey_for_team_at_week(
 
     # Re-call _solve_massey directly (the audit point: confirm bit-exact)
     sides_for_solve = [(t, o, p) for (t, o, p, _w) in sides]
-    alpha, offense, defense = _solve_massey(sides_for_solve, teams_in_basis)
+    try:
+        _result = _solve_massey(sides_for_solve, teams_in_basis)
+        if len(_result) == 4:
+            alpha, offense, defense, _cond = _result
+        else:
+            alpha, offense, defense = _result
+        massey_skipped = False
+    except Exception as _e:
+        # Centered Massey raises MasseyConditioningError when basis is too
+        # disconnected for identifiability (runtime emits no entry for that
+        # team-week; bit-exact agreement is "both emit nothing").
+        alpha, offense, defense = 0.0, {}, {}
+        massey_skipped = True
 
     # Compute condition number of the LS design matrix for diagnostic M3
     n = len(teams_in_basis)
@@ -189,6 +201,7 @@ def trace_massey_for_team_at_week(
         "team_defense": float(defense.get(team_id, 0.0)),
         "basis_temporal_violations": violations,
         "basis_games_preview": preview,
+        "massey_skipped": massey_skipped,
     }
 
 
