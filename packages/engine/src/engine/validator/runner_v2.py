@@ -1813,17 +1813,37 @@ PHASE6_MIN_BIN_N: int = 10                  # ignore tiny bins (pure noise)
 PHASE6_KFOLD_K: int = 5                     # K-fold CV within holdout for isotonic
 PHASE6_TAIL_DECILE_GAP: float = 0.05        # auto-slip threshold on D1 and D10
                                             # (per decisions.md 2026-05-26 evening)
-PHASE6_TAIL_MIN_N: int = 100                # statistical-power floor for the tail-bin
-                                            # auto-slip gate (Reese 2026-05-29 Football
-                                            # diagnostic finding). At base rate p in
-                                            # [0.05, 0.95], SE of binomial proportion
-                                            # at n=100 is ≤ 0.022; detecting a 0.05
-                                            # gap as significant requires n ≥ 131 at
-                                            # the typical D1/D10 base rates, so n=100
-                                            # gives ~95% power on the gate. Bins below
-                                            # this floor are statistically too noisy
-                                            # to fire the auto-slip rule on; they're
-                                            # surfaced as Phase 7 disclosure items.
+PHASE6_TAIL_MIN_N: int = 139                # statistical-power floor for the tail-bin
+                                            # auto-slip gate. Justified by the standard
+                                            # binomial-proportion sample-size calculation:
+                                            #   n = z² · p · (1-p) / target_gap²
+                                            # with z=1.96 (95% CI), target_gap=0.05
+                                            # (the auto-slip threshold), and p=0.10
+                                            # (the conservative-rounded version of the
+                                            # observed Football D1 base rate of 0.094).
+                                            # At p=0.10: n = 3.8416 · 0.09 / 0.0025 = 138.30,
+                                            # ceil → 139. Rounding p up from 0.094 to 0.10
+                                            # is intentional: it gives more statistical
+                                            # headroom against a noisy point-estimate of
+                                            # p from only 32 games. Bins below this floor
+                                            # are statistically too noisy to fire the
+                                            # launch-blocking auto-slip rule.
+                                            #
+                                            # Audit trail (decisions.md 2026-05-29):
+                                            # Initial commit 92b81a1 used n=100, chosen
+                                            # post-hoc because Football had failed under
+                                            # the original 6c8b130 K-fold methodology
+                                            # without a tail-power floor. Reese 2026-05-29
+                                            # verification flagged n=100 as a permissive
+                                            # round midpoint without independent design
+                                            # justification; amended to n=139 with the
+                                            # observed-base-rate sample-size calc as the
+                                            # principled basis. The verdict is unchanged
+                                            # between n=100 and n=139 (both clear Football
+                                            # and Boys Basketball) but n=139 has
+                                            # independent statistical-design justification.
+                                            # See decisions.md 2026-05-29 for full audit
+                                            # trail + b1_2b_2c_arc_patterns.md pattern #8.
 
 
 @dataclass

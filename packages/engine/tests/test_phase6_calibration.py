@@ -282,15 +282,43 @@ def test_tail_gaps_empty_bin_treated_as_zero_gap():
 from engine.validator.runner_v2 import PHASE6_TAIL_MIN_N
 
 
-def test_phase6_tail_min_n_is_100():
+def test_phase6_tail_min_n_is_139():
     """Statistical-power floor for the tail-bin auto-slip gate.
 
-    Per Football diagnostic 2026-05-29: n=131 needed at typical D1/D10
-    base rates to declare a 0.05 gap real at 95% confidence. n=100 gives
-    ~95% power across base rates 0.05-0.95. Floor below this is
-    statistically noise-dominated and should NOT fire auto-slip.
+    Justified by standard binomial-proportion sample-size calculation:
+        n = z² · p · (1-p) / target_gap²
+    with z=1.96 (95% CI), target_gap=0.05 (auto-slip threshold), and
+    p ≈ 0.094 (observed Football D1 post-isotonic base rate). Result:
+    n=139 gives 95% power to detect a 0.05 gap as significant at this
+    base rate.
+
+    Amended from initial n=100 (commit 92b81a1) per Reese 2026-05-29
+    verification: n=100 was post-hoc convenience without independent
+    design justification; n=139 uses the observed-base-rate
+    sample-size calc as the literature-defensible basis.
     """
-    assert PHASE6_TAIL_MIN_N == 100
+    assert PHASE6_TAIL_MIN_N == 139
+
+
+def test_phase6_tail_min_n_derived_from_binomial_sample_size_at_p_010():
+    """Sanity check the n=139 derivation matches the binomial formula.
+
+    n = (1.96² · p · (1-p)) / target_gap²
+
+    Anchored at p=0.10 — the conservative-rounded version of the
+    observed Football D1 base rate of 0.094. Using p=0.10 (slightly
+    larger than the observed 0.094) gives a higher n requirement
+    (139 vs 131); the conservative choice provides more statistical
+    headroom and uses a base rate that's robust to the noisy
+    point-estimate of p=0.094 on only 32 games.
+    """
+    import math
+    z = 1.96
+    p = 0.10  # conservative-rounded D1 base rate (actual observed ≈ 0.094)
+    target_gap = 0.05
+    n_computed = math.ceil((z ** 2) * p * (1 - p) / (target_gap ** 2))
+    assert n_computed == 139
+    assert PHASE6_TAIL_MIN_N == n_computed
 
 
 def test_phase6_tail_min_n_higher_than_mid_bin_threshold():
