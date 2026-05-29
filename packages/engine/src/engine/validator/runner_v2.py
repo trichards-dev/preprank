@@ -1618,3 +1618,175 @@ def run_phase4e_prior_year_ablation(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 — Q1-Q4 competitive stratification
+# ---------------------------------------------------------------------------
+# Per the v2 plan §5: report per-sport accuracy + Brier per quartile of
+# abs(rating_diff). Q1 = closest games (the hardest; toss-ups). Q4 =
+# biggest blowouts (the easiest to predict). Phase 7 marketing claims
+# require Q1 lower-CI > pro benchmark, NOT overall accuracy > pro
+# benchmark.
+#
+# The fit configuration matches the engine's current candidate-final
+# state: β₃ pinned to 0 (Phase 4c disposition), β₄/β₅/β₆ free
+# (post-Phase-4d-Step-4 + Phase-4e disposition). For sports where β₄ or
+# β₅ ended up in noise band on their respective phases, the fit still
+# allows them — the regression just lands them near 0.
+PHASE5_PINNED_INDICES = (3,)
+
+
+@dataclass
+class SportPhase5Result:
+    """Per-sport stratification result.
+
+    sport       : sport name
+    fit         : the model fit used for predictions on holdout
+    n_holdout   : holdout games for this sport
+    overall_acc : accuracy across all 4 quartiles (sanity check)
+    overall_brier: brier across all quartiles
+    quartiles   : list of QuartileResult Q1-Q4
+    """
+
+    sport: str
+    fit: FitResult
+    n_holdout: int
+    overall_accuracy: float
+    overall_brier: float
+    quartiles: list[Any] = field(default_factory=list)
+
+
+@dataclass
+class Phase5Result:
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, SportPhase5Result] = field(default_factory=dict)
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+def run_phase5_stratification(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-phase5-stratification",
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase5Result:
+    """Phase 5: per-sport Q1-Q4 competitive stratification.
+
+    Fits the engine's current candidate-final model per sport (β₃ pinned;
+    β₄/β₅/β₆ free), predicts holdout, and splits the predictions into
+    quartiles by abs(home_rating - away_rating). Reports per-quartile
+    accuracy + Brier with bootstrap CIs.
+
+    This is descriptive — no ablation, no FDR. Output feeds Phase 7
+    marketing-claims rigor framing.
+    """
+    from .stratify import stratify  # local import: avoid circular at module load
+
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    rf_config = _PredictionConfig()
+
+    result = Phase5Result(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+
+        inputs_list: list[RunInputs] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_list.append(load_run_inputs(sb, sid, sport_name, season, teams=teams))
+
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inp in inputs_list:
+            form_table = precompute_team_week_form(inp.games, sport_name, rf_config)
+            log_margin_table = precompute_team_week_log_margins(inp.games)
+            massey_table = precompute_team_week_massey_od(inp.games)
+            rows = _build_training_rows(
+                inp,
+                recent_form_signals=form_table,
+                log_margin_signals=log_margin_table,
+                massey_od_signals=massey_table,
+            )
+            if inp.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows or not hold_rows:
+            result.fit_warnings.append(f"{sport_name}: insufficient rows — skipped")
+            continue
+
+        try:
+            fit = fit_sport(
+                sport_name, train_rows, cv_seed=seed,
+                fixed_indices=list(PHASE5_PINNED_INDICES),
+            )
+        except Exception as e:
+            result.fit_warnings.append(
+                f"{sport_name}: fit raised {type(e).__name__}: {e}"
+            )
+            continue
+
+        if not fit.converged:
+            result.fit_warnings.append(f"{sport_name}: fit did not converge cleanly")
+
+        config = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit.coefficients}
+        )
+        preds = _predict_rows(hold_rows, sport_name, config)
+        if not preds:
+            continue
+
+        overall_acc = game_winner_accuracy(preds)
+        overall_bri = brier_score(preds)
+        quartiles = stratify(preds, n_bootstrap=n_bootstrap, seed=seed)
+
+        result.sports[sport_name] = SportPhase5Result(
+            sport=sport_name,
+            fit=fit,
+            n_holdout=len(preds),
+            overall_accuracy=overall_acc,
+            overall_brier=overall_bri,
+            quartiles=quartiles,
+        )
+
+    return result
+
+
