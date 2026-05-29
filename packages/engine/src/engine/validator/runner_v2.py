@@ -1320,3 +1320,301 @@ def run_phase4d_offdef_ablation(
                 result.n_significant_after_fdr += 1
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4e — prior-year carryover ablation (β₅ slot)
+# ---------------------------------------------------------------------------
+# Reese 2026-05-29 design decisions:
+#  - Ablation control: PIN β₃ + β₄ + β₅ (stricter null). β₄ pinned in BOTH
+#    fits so it cannot absorb β₅'s signal when β₅ is pinned in the ablation.
+#  - Cold-start handling: report TWO measurements — weeks-1-3 (PRIMARY;
+#    where β₅ structurally fires via _decay) and full-season (SECONDARY,
+#    Phase 4d parity). Headline is the primary.
+#  - Missing prior-year handling: KEEP cold-start games (they're precisely
+#    what β₅ targets). Diagnostic counts _pyc=0 share in the primary
+#    holdout window.
+PHASE4E_REF_PINNED_INDICES = (3, 4)         # β₃ + β₄ pinned, β₅ free
+PHASE4E_ABL_PINNED_INDICES = (3, 4, 5)      # β₃ + β₄ + β₅ all pinned
+
+
+@dataclass
+class Phase4eMeasurement:
+    """One acc/Brier-lift measurement on a sport's holdout subset.
+
+    Phase 4e reports two measurements per sport: weeks_1_3 (primary) and
+    full_season (secondary, Phase 4d parity).
+    """
+
+    label: str                              # "weeks_1_3" | "full_season"
+    n_holdout: int
+    baseline_accuracy: float
+    ablation_accuracy: float
+    accuracy_lift: float
+    accuracy_lift_ci: tuple[float, float]
+    baseline_brier: float
+    ablation_brier: float
+    brier_lift: float
+    brier_lift_ci: tuple[float, float]
+    p_value_one_sided: float
+    significant_after_fdr: bool = False
+
+
+@dataclass
+class SportPhase4eResult:
+    """Per-sport result block for Phase 4e prior-year-carryover ablation.
+
+    Reference fit: β₃ + β₄ pinned, β₅ free (Phase 4d parity except β₄
+    held constant so it cannot absorb β₅'s signal).
+    Ablation fit: β₃ + β₄ + β₅ all pinned. β₆ free in both.
+    """
+
+    sport: str
+    fit_baseline: FitResult                 # PHASE4E_REF_PINNED_INDICES
+    fit_ablation: FitResult                 # PHASE4E_ABL_PINNED_INDICES
+    weeks_1_3: "Phase4eMeasurement"
+    full_season: "Phase4eMeasurement"
+    n_pyc_zero_holdout: int = 0
+    n_pyc_zero_genuine_coldstart: int = 0
+    n_pyc_zero_data_gap: int = 0
+
+
+@dataclass
+class Phase4eResult:
+    config_label: str
+    run_id: str
+    timestamp: datetime
+    train_seasons: list[int]
+    holdout_seasons: list[int]
+    drop_seasons: list[int]
+    sports: dict[str, SportPhase4eResult] = field(default_factory=dict)
+    n_significant_after_fdr_primary: int = 0
+    n_significant_after_fdr_secondary: int = 0
+    fit_warnings: list[str] = field(default_factory=list)
+
+
+def _filter_rows_weeks_1_3(rows: list[GameTrainingRow]) -> list[GameTrainingRow]:
+    """Filter to games where home week_number ∈ {1, 2, 3} (where β₅ fires)."""
+    return [r for r in rows if 1 <= r.home_state.week_number <= 3]
+
+
+def _measure_phase4e_lift(
+    label: str,
+    hold_rows: list[GameTrainingRow],
+    sport_name: str,
+    config_b: PredictionConfig,
+    config_a: PredictionConfig,
+    *,
+    n_bootstrap: int,
+    seed: int,
+) -> Phase4eMeasurement:
+    """Compute paired-bootstrap lift on a holdout subset."""
+    preds_b = _predict_rows(hold_rows, sport_name, config_b)
+    preds_a = _predict_rows(hold_rows, sport_name, config_a)
+    if preds_b and preds_a:
+        b_acc = game_winner_accuracy(preds_b)
+        a_acc = game_winner_accuracy(preds_a)
+        b_bri = brier_score(preds_b)
+        a_bri = brier_score(preds_a)
+        acc_lift, acc_ci, brier_lift, brier_ci, p_one = _paired_bootstrap_lift(
+            preds_b, preds_a, n_resamples=n_bootstrap, seed=seed,
+        )
+    else:
+        b_acc = a_acc = b_bri = a_bri = 0.0
+        acc_lift = brier_lift = 0.0
+        acc_ci = brier_ci = (0.0, 0.0)
+        p_one = 1.0
+    return Phase4eMeasurement(
+        label=label,
+        n_holdout=len(hold_rows),
+        baseline_accuracy=b_acc,
+        ablation_accuracy=a_acc,
+        accuracy_lift=acc_lift,
+        accuracy_lift_ci=acc_ci,
+        baseline_brier=b_bri,
+        ablation_brier=a_bri,
+        brier_lift=brier_lift,
+        brier_lift_ci=brier_ci,
+        p_value_one_sided=p_one,
+    )
+
+
+def run_phase4e_prior_year_ablation(
+    *,
+    train_seasons: list[int],
+    holdout_seasons: list[int],
+    drop_seasons: list[int] | None = None,
+    sports: list[str] | None = None,
+    config_label: str = "wf-phase4e-prior-year-carryover-ablation",
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    fdr_alpha: float = 0.05,
+    supabase_client: Any | None = None,
+    supabase_client_factory: Callable[[], Any] | None = None,
+    now_fn: Callable[[], datetime] | None = None,
+    run_id: str | None = None,
+) -> Phase4eResult:
+    """Phase 4e: per-sport β₅ ablation. Prior-year carryover enabled vs β₅=0.
+
+    Both reference and ablation:
+      - β₃ pinned to 0 (Phase 4c disposition)
+      - β₄ PINNED to 0 in BOTH fits (Reese 2026-05-29 design call: β₄
+        cannot absorb β₅'s signal when β₅ is masked in the ablation)
+      - β₆ free in both
+    Reference: β₅ free.
+    Ablation: β₅ pinned to 0.
+
+    Reports two holdout measurements per sport:
+      - weeks_1_3 (PRIMARY): rows where home week_number ∈ {1,2,3}.
+        This is where _decay() makes β₅ non-zero structurally.
+      - full_season (SECONDARY): matches Phase 4d holdout scope.
+
+    Halts at phase boundary regardless of outcome.
+    """
+    drop_seasons = list(drop_seasons or [])
+    sports = list(sports) if sports else list(ALL_SPORTS)
+    now = (now_fn or datetime.utcnow)()
+    rid = run_id or str(uuid.uuid4())
+
+    if supabase_client is None:
+        if supabase_client_factory is None:
+            from .runner import _default_supabase_client_factory
+
+            supabase_client_factory = _default_supabase_client_factory
+        supabase_client = supabase_client_factory()
+    sb = supabase_client
+
+    sports_map = load_sports_map(sb)
+    name_to_id = {n.lower(): sid for sid, n in sports_map.items()}
+    teams = load_teams_with_schools(sb)
+
+    rf_config = _PredictionConfig()
+
+    result = Phase4eResult(
+        config_label=config_label,
+        run_id=rid,
+        timestamp=now,
+        train_seasons=list(train_seasons),
+        holdout_seasons=list(holdout_seasons),
+        drop_seasons=list(drop_seasons),
+    )
+
+    p_values_primary: list[tuple[str, float]] = []
+    p_values_secondary: list[tuple[str, float]] = []
+
+    for sport_name in sports:
+        sid = name_to_id.get(sport_name.lower())
+        if sid is None:
+            continue
+
+        inputs_list: list[RunInputs] = []
+        for season in train_seasons + holdout_seasons:
+            if season in drop_seasons:
+                continue
+            inputs_list.append(load_run_inputs(sb, sid, sport_name, season, teams=teams))
+
+        train_rows: list[GameTrainingRow] = []
+        hold_rows: list[GameTrainingRow] = []
+        for inp in inputs_list:
+            form_table = precompute_team_week_form(inp.games, sport_name, rf_config)
+            log_margin_table = precompute_team_week_log_margins(inp.games)
+            massey_table = precompute_team_week_massey_od(inp.games)
+            rows = _build_training_rows(
+                inp,
+                recent_form_signals=form_table,
+                log_margin_signals=log_margin_table,
+                massey_od_signals=massey_table,
+            )
+            if inp.season_year in holdout_seasons:
+                hold_rows.extend(rows)
+            else:
+                train_rows.extend(rows)
+
+        if not train_rows or not hold_rows:
+            result.fit_warnings.append(f"{sport_name}: insufficient rows — skipped")
+            continue
+
+        try:
+            fit_b = fit_sport(
+                sport_name, train_rows, cv_seed=seed,
+                fixed_indices=list(PHASE4E_REF_PINNED_INDICES),
+            )
+            fit_a = fit_sport(
+                sport_name, train_rows, cv_seed=seed,
+                fixed_indices=list(PHASE4E_ABL_PINNED_INDICES),
+            )
+        except Exception as e:
+            result.fit_warnings.append(
+                f"{sport_name}: fit raised {type(e).__name__}: {e}"
+            )
+            continue
+
+        if not fit_b.converged:
+            result.fit_warnings.append(f"{sport_name}: ref did not converge cleanly")
+        if not fit_a.converged:
+            result.fit_warnings.append(f"{sport_name}: ablation did not converge cleanly")
+
+        config_b = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_b.coefficients}
+        )
+        config_a = PredictionConfig(
+            model_coefficients_by_sport={sport_name: fit_a.coefficients}
+        )
+
+        rows_w1_3 = _filter_rows_weeks_1_3(hold_rows)
+        m_primary = _measure_phase4e_lift(
+            "weeks_1_3", rows_w1_3, sport_name, config_b, config_a,
+            n_bootstrap=n_bootstrap, seed=seed,
+        )
+        m_secondary = _measure_phase4e_lift(
+            "full_season", hold_rows, sport_name, config_b, config_a,
+            n_bootstrap=n_bootstrap, seed=seed,
+        )
+
+        n_zero = 0
+        for r in rows_w1_3:
+            if r.home_state.prior_year_rating is None:
+                n_zero += 1
+            if r.away_state.prior_year_rating is None:
+                n_zero += 1
+
+        sport_result = SportPhase4eResult(
+            sport=sport_name,
+            fit_baseline=fit_b,
+            fit_ablation=fit_a,
+            weeks_1_3=m_primary,
+            full_season=m_secondary,
+            n_pyc_zero_holdout=n_zero,
+            n_pyc_zero_genuine_coldstart=n_zero,
+            n_pyc_zero_data_gap=0,
+        )
+        result.sports[sport_name] = sport_result
+        p_values_primary.append((sport_name, m_primary.p_value_one_sided))
+        p_values_secondary.append((sport_name, m_secondary.p_value_one_sided))
+
+    if p_values_primary:
+        sport_names = [s for s, _ in p_values_primary]
+        p_list = [p for _, p in p_values_primary]
+        flags = benjamini_hochberg(p_list, alpha=fdr_alpha)
+        for sport_name, sig in zip(sport_names, flags):
+            sr = result.sports[sport_name]
+            sr.weeks_1_3.significant_after_fdr = bool(
+                sig and sr.weeks_1_3.accuracy_lift_ci[0] > 0.0
+            )
+            if sr.weeks_1_3.significant_after_fdr:
+                result.n_significant_after_fdr_primary += 1
+    if p_values_secondary:
+        sport_names = [s for s, _ in p_values_secondary]
+        p_list = [p for _, p in p_values_secondary]
+        flags = benjamini_hochberg(p_list, alpha=fdr_alpha)
+        for sport_name, sig in zip(sport_names, flags):
+            sr = result.sports[sport_name]
+            sr.full_season.significant_after_fdr = bool(
+                sig and sr.full_season.accuracy_lift_ci[0] > 0.0
+            )
+            if sr.full_season.significant_after_fdr:
+                result.n_significant_after_fdr_secondary += 1
+
+    return result
+
+
