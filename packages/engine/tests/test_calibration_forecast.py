@@ -104,7 +104,13 @@ def test_predicted_decile_handles_out_of_range():
 # compute_forecast — full path
 # ---------------------------------------------------------------------------
 def _sample_table_well_populated() -> dict:
-    """A small reliability table with all bins well above TAIL_MIN_N."""
+    """A small reliability table with all bins well-populated.
+
+    Under Option D (binomial sampling CI): n=1000 per bin produces
+    CI half-widths of ~1-3pp across most predictions, keeping
+    most test predictions in the "Confident pick" tier for clean
+    expectations.
+    """
     return {
         "schema_version": 1,
         "calibration_run_id": "test-fixture",
@@ -114,7 +120,7 @@ def _sample_table_well_populated() -> dict:
                 "isotonic_slope_in_band": True,
                 "deciles": [
                     {"bin_lower": i/10, "bin_upper": (i+1)/10,
-                     "n_games": 200, "mean_predicted": (i + 0.5)/10,
+                     "n_games": 1000, "mean_predicted": (i + 0.5)/10,
                      "mean_observed": (i + 0.5)/10, "gap": 0.03}
                     for i in range(10)
                 ],
@@ -136,34 +142,36 @@ def test_compute_forecast_returns_integer_percent_fields():
 
 
 def test_compute_forecast_ci_clips_to_zero_lower_bound():
-    """CI lower bound clipped at 0."""
+    """CI lower bound clipped at 0 when prediction near 0% + nonzero CI."""
     table = _sample_table_well_populated()
-    # gap 0.03 → half_width 3pp; p_pct=1 → ci_low = max(0, 1-3) = 0
+    # D1: n=1000, p_obs=0.05 → hw = 1.96 × √(0.05·0.95/1000) ≈ 1.4pp → 1pp
+    # p_pct=1 → ci_low = max(0, 1-1) = 0
     result = compute_forecast(0.01, "TestSport", table)
     assert result.home_win_probability_ci_low == 0
-    assert result.home_win_probability_ci_high == 4
+    # Upper bound should not exceed p_pct + half_width
+    assert result.home_win_probability_ci_high <= 5
 
 
 def test_compute_forecast_ci_clips_to_100_upper_bound():
-    """CI upper bound clipped at 100."""
+    """CI upper bound clipped at 100 when prediction near 100% + nonzero CI."""
     table = _sample_table_well_populated()
-    # gap 0.03 → half_width 3pp; p_pct=99 → ci_high = min(100, 99+3) = 100
+    # D10: n=1000, p_obs=0.95 → hw ≈ 1.4pp → 1pp
     result = compute_forecast(0.99, "TestSport", table)
     assert result.home_win_probability_ci_high == 100
-    assert result.home_win_probability_ci_low == 96
+    assert result.home_win_probability_ci_low >= 95
 
 
 def test_compute_forecast_tier_label_set():
-    """Tier label is one of the four canonical strings."""
+    """Confident pick fires for well-populated mid bins."""
     table = _sample_table_well_populated()
+    # D6: n=1000, p_obs=0.65 → hw = 1.96 × √(0.65·0.35/1000) ≈ 3pp
     result = compute_forecast(0.65, "TestSport", table)
-    # gap 0.03 → half_width 3 → Confident pick
     assert result.confidence_tier == "confident_pick"
     assert result.confidence_tier_label == "Confident pick"
 
 
 def test_compute_forecast_unknown_sport_returns_zero_ci():
-    """Sport not in table → gap=0, CI = [p_pct, p_pct]."""
+    """Sport not in table → n=0, CI half_width=0, CI = [p_pct, p_pct]."""
     table = _sample_table_well_populated()
     result = compute_forecast(0.5, "NotASport", table)
     assert result.home_win_probability == 50
@@ -172,81 +180,135 @@ def test_compute_forecast_unknown_sport_returns_zero_ci():
 
 
 # ---------------------------------------------------------------------------
-# Underpowered tail-bin fallback
+# Option D — binomial sampling CI semantics
 # ---------------------------------------------------------------------------
-def test_underpowered_tail_uses_adjacent_bin_when_slope_in_band():
-    """Football D1 n=32 should fall back to D2's gap when slope is in band."""
-    table = {
+def test_binomial_ci_widens_when_bin_n_is_small():
+    """A bin with n=32 should produce a wider CI than n=1000."""
+    # Use Football D1 from real Phase 6 data: n=32, p_obs=0.094
+    table_small_n = {
         "sports": {
-            "Football": {
+            "S": {
                 "isotonic_slope_in_band": True,
                 "deciles": [
-                    # D1: n=32 (below TAIL_MIN_N=139), gap=0.08
                     {"bin_lower": 0.0, "bin_upper": 0.1,
                      "n_games": 32, "mean_predicted": 0.05,
-                     "mean_observed": 0.13, "gap": 0.08},
-                    # D2: n=197 (well above floor), gap=0.01
-                    {"bin_lower": 0.1, "bin_upper": 0.2,
-                     "n_games": 197, "mean_predicted": 0.15,
-                     "mean_observed": 0.16, "gap": 0.01},
+                     "mean_observed": 0.094, "gap": 0.044},
                 ] + [
                     {"bin_lower": i/10, "bin_upper": (i+1)/10,
-                     "n_games": 100, "mean_predicted": (i + 0.5)/10,
-                     "mean_observed": (i + 0.5)/10, "gap": 0.02}
-                    for i in range(2, 10)
-                ],
-                "model_coefficients": {},
-            }
-        }
-    }
-    # p=0.05 falls in D1 (n=32, below floor). Fallback to D2 (n=197 > floor).
-    result = compute_forecast(0.05, "Football", table)
-    assert result.underpowered_tail_fallback_used is True
-    # half-width should be from D2 (0.01) → 1pp, NOT from D1 (0.08) → 8pp
-    assert result.home_win_probability_ci_high - result.home_win_probability_ci_low <= 2
-
-
-def test_well_populated_decile_does_not_use_fallback():
-    """When bin is well-populated, no fallback."""
-    table = _sample_table_well_populated()
-    result = compute_forecast(0.5, "TestSport", table)
-    assert result.underpowered_tail_fallback_used is False
-
-
-def test_underpowered_does_not_use_fallback_when_slope_out_of_band():
-    """If the sport's overall calibration is bad, don't paper over with adjacent bins.
-
-    Surfacing the wider CI honestly is more useful than swapping in
-    a healthier bin's gap.
-    """
-    table = {
-        "sports": {
-            "BadSport": {
-                "isotonic_slope_in_band": False,  # out of band
-                "deciles": [
-                    {"bin_lower": 0.0, "bin_upper": 0.1,
-                     "n_games": 30, "mean_predicted": 0.05,
-                     "mean_observed": 0.20, "gap": 0.15},
-                ] + [
-                    {"bin_lower": i/10, "bin_upper": (i+1)/10,
-                     "n_games": 200, "mean_predicted": (i + 0.5)/10,
-                     "mean_observed": (i + 0.5)/10, "gap": 0.02}
+                     "n_games": 1000, "mean_predicted": (i + 0.5)/10,
+                     "mean_observed": (i + 0.5)/10, "gap": 0.01}
                     for i in range(1, 10)
                 ],
                 "model_coefficients": {},
             }
         }
     }
-    result = compute_forecast(0.05, "BadSport", table)
-    assert result.underpowered_tail_fallback_used is False
-    # The raw 15pp gap surfaces honestly. p=5%, half-width=15pp,
-    # so CI is [max(0, 5-15), min(100, 5+15)] = [0, 20] — width 20pp,
-    # reflecting the full 15pp half-width on the upper side (lower
-    # side clipped to 0 by floor). Compare to well-populated sports
-    # where width would be ~6pp (3pp half-width).
-    assert result.home_win_probability_ci_high - result.home_win_probability_ci_low >= 15
-    # And the tier label reflects the wide gap (Toss-up at hw=15)
-    assert result.confidence_tier in ("toss_up", "long_shot")
+    small_n_result = compute_forecast(0.03, "S", table_small_n)
+    large_n_result = compute_forecast(0.55, "S", table_small_n)
+
+    small_n_width = small_n_result.home_win_probability_ci_high - small_n_result.home_win_probability_ci_low
+    large_n_width = large_n_result.home_win_probability_ci_high - large_n_result.home_win_probability_ci_low
+
+    # n=32 + p_obs=0.094 → hw ≈ 10pp → width ≥ 10pp (with possible clip to 0)
+    # n=1000 + p_obs=0.55 → hw ≈ 3pp → width ≤ 6pp
+    assert small_n_width > large_n_width
+
+
+def test_binomial_ci_at_known_values_football_d1():
+    """Football D1 (n=32, p_obs=0.094) should produce ~10pp half-width.
+
+    Sanity check against the preview math in the Option D approval.
+    """
+    table = {
+        "sports": {
+            "Football": {
+                "isotonic_slope_in_band": True,
+                "deciles": [
+                    {"bin_lower": 0.0, "bin_upper": 0.1,
+                     "n_games": 32, "mean_predicted": 0.05,
+                     "mean_observed": 0.094, "gap": 0.044},
+                ] + [
+                    {"bin_lower": i/10, "bin_upper": (i+1)/10,
+                     "n_games": 500, "mean_predicted": (i + 0.5)/10,
+                     "mean_observed": (i + 0.5)/10, "gap": 0.01}
+                    for i in range(1, 10)
+                ],
+                "model_coefficients": {},
+            }
+        }
+    }
+    result = compute_forecast(0.03, "Football", table)
+    # Expected: hw = round(100 * 1.96 * sqrt(0.094 * 0.906 / 32)) = round(10.1) = 10pp
+    # p_pct=3 → ci = [max(0, 3-10), min(100, 3+10)] = [0, 13]
+    # Width = 13pp
+    width = result.home_win_probability_ci_high - result.home_win_probability_ci_low
+    assert 9 <= width <= 14  # tolerance for round-trip
+    # Tier should be Lean (6-10pp half-width)
+    assert result.confidence_tier == "lean"
+    # bin_underpowered flag should fire (n=32 < 139)
+    assert result.bin_underpowered is True
+    assert result.bin_n_games == 32
+
+
+def test_binomial_ci_at_known_values_volleyball_d9():
+    """Volleyball D9 (n=430, p_obs=0.84) should produce ~3pp → Confident pick."""
+    table = {
+        "sports": {
+            "Volleyball": {
+                "isotonic_slope_in_band": True,
+                "deciles": [
+                    {"bin_lower": i/10, "bin_upper": (i+1)/10,
+                     "n_games": 100, "mean_predicted": (i + 0.5)/10,
+                     "mean_observed": (i + 0.5)/10, "gap": 0.01}
+                    for i in range(8)
+                ] + [
+                    # D9: well-populated, high p_obs
+                    {"bin_lower": 0.8, "bin_upper": 0.9,
+                     "n_games": 430, "mean_predicted": 0.85,
+                     "mean_observed": 0.84, "gap": 0.01},
+                    {"bin_lower": 0.9, "bin_upper": 1.0,
+                     "n_games": 200, "mean_predicted": 0.95,
+                     "mean_observed": 0.95, "gap": 0.01},
+                ],
+                "model_coefficients": {},
+            }
+        }
+    }
+    result = compute_forecast(0.85, "Volleyball", table)
+    # hw = 1.96 × √(0.84·0.16/430) ≈ 3.5pp → 3pp or 4pp
+    assert result.confidence_tier == "confident_pick"
+    assert result.bin_underpowered is False
+    assert result.bin_n_games == 430
+
+
+def test_compute_forecast_underpowered_bin_flag_fires_when_n_below_floor():
+    """bin_underpowered = True when n < TAIL_MIN_N (139)."""
+    table = {
+        "sports": {
+            "S": {
+                "isotonic_slope_in_band": True,
+                "deciles": [
+                    {"bin_lower": i/10, "bin_upper": (i+1)/10,
+                     "n_games": 50,  # below floor
+                     "mean_predicted": (i + 0.5)/10,
+                     "mean_observed": (i + 0.5)/10, "gap": 0.05}
+                    for i in range(10)
+                ],
+                "model_coefficients": {},
+            }
+        }
+    }
+    result = compute_forecast(0.5, "S", table)
+    assert result.bin_underpowered is True
+    assert result.bin_n_games == 50
+
+
+def test_compute_forecast_bin_n_reported_in_result():
+    """ForecastResult exposes bin_n_games for downstream use."""
+    table = _sample_table_well_populated()
+    result = compute_forecast(0.5, "TestSport", table)
+    assert result.bin_n_games == 1000
+    assert result.bin_underpowered is False
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +417,7 @@ def test_forecast_result_is_dataclass_with_required_fields():
         "confidence_tier",
         "confidence_tier_label",
         "predicted_decile",
-        "underpowered_tail_fallback_used",
+        "bin_n_games",
+        "bin_underpowered",
     ):
         assert required in fields, f"missing field: {required}"

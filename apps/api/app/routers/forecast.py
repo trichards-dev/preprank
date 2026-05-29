@@ -147,10 +147,13 @@ def _resolve_home_win_probability(
     h_rating = float(h_rating_row.power_rating)
     a_rating = float(a_rating_row.power_rating)
 
-    # Use engine.win_probability for a sport-appropriate compute
+    # Use engine.win_probability — Elo-style scalar (no sport-specific
+    # calibration at this layer; the per-sport reliability table provides
+    # the calibration via the CI half-width). v1.1 will swap this for
+    # predict_game_v3 with the full fitted β coefficients.
     from engine.win_probability import win_probability
     try:
-        prob = win_probability(home_rating=h_rating, away_rating=a_rating, sport=sport_name)
+        prob = win_probability(home_rating=h_rating, away_rating=a_rating)
     except Exception:
         return None, "OTHER"
 
