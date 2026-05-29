@@ -141,6 +141,142 @@ def test_power_ratings_constraint_columns_match_scraper_on_conflict():
 
 
 # ---------------------------------------------------------------------------
+# Post-resolution dedup tests — NO DB required.
+#
+# Discovered 2026-05-28 GBB 2022 halt: the scraper's string-based
+# deduplicate() at L347 lets name-variant duplicates through. After
+# match_school() resolution they end up with the same (home_team_id,
+# away_team_id, sport_id, season_year, game_date) tuple in games_to_insert,
+# and the upsert crashes with Postgres 21000.
+#
+# The post-resolution dedup pass closes the hole; these tests guard it.
+# ---------------------------------------------------------------------------
+def test_post_resolution_dedup_collapses_name_variant_duplicates():
+    """Two rows with the same team_id tuple but logically distinct source
+    rows must collapse to one. Survivor picked by richness order."""
+    from scripts.ingest_sports_historical import deduplicate_by_constraint
+
+    games_to_insert = [
+        # Row A: from 5A filter sweep, is_district=True (richer metadata)
+        {
+            "home_team_id": 100, "away_team_id": 200,
+            "sport_id": 6, "season_year": 2022, "game_date": "2022-01-15",
+            "home_score": 45, "away_score": 38, "status": "final",
+            "is_district": True, "is_playoff": False, "week_number": None,
+            "source": "lhsaaonline",
+        },
+        # Row B: same constraint tuple, from 4A filter sweep, is_district=False
+        {
+            "home_team_id": 100, "away_team_id": 200,
+            "sport_id": 6, "season_year": 2022, "game_date": "2022-01-15",
+            "home_score": 45, "away_score": 38, "status": "final",
+            "is_district": False, "is_playoff": False, "week_number": None,
+            "source": "lhsaaonline",
+        },
+        # Row C: different teams — must NOT be affected by dedup
+        {
+            "home_team_id": 300, "away_team_id": 400,
+            "sport_id": 6, "season_year": 2022, "game_date": "2022-01-15",
+            "home_score": 60, "away_score": 55, "status": "final",
+            "is_district": True, "is_playoff": False, "week_number": None,
+            "source": "lhsaaonline",
+        },
+    ]
+
+    deduped, n_collisions = deduplicate_by_constraint(games_to_insert)
+
+    assert n_collisions == 1
+    assert len(deduped) == 2
+    survivor = next(r for r in deduped if r["home_team_id"] == 100)
+    assert survivor["is_district"] is True, \
+        "Richness picker should keep the row with is_district=True"
+    other = next(r for r in deduped if r["home_team_id"] == 300)
+    assert other["home_score"] == 60
+
+
+def test_post_resolution_dedup_prefers_later_seen_on_tie():
+    """When richness is equal, the later-seen row wins — later classification
+    filter sweeps are more likely to have corrected/updated entries."""
+    from scripts.ingest_sports_historical import deduplicate_by_constraint
+
+    row_first = {
+        "home_team_id": 100, "away_team_id": 200,
+        "sport_id": 12, "season_year": 2024, "game_date": "2024-03-15",
+        "home_score": 5, "away_score": 3, "status": "final",
+        "is_district": False, "is_playoff": False, "week_number": None,
+        "source": "lhsaaonline-5A",
+    }
+    row_later = {**row_first, "source": "lhsaaonline-4A"}
+
+    deduped, n_collisions = deduplicate_by_constraint([row_first, row_later])
+
+    assert n_collisions == 1
+    assert len(deduped) == 1
+    assert deduped[0]["source"] == "lhsaaonline-4A", \
+        "On tie, the later-seen row should win"
+
+
+def test_post_resolution_dedup_no_collisions_passes_through():
+    """Empty case: no collisions, input passes through unchanged."""
+    from scripts.ingest_sports_historical import deduplicate_by_constraint
+
+    rows = [
+        {
+            "home_team_id": 100, "away_team_id": 200,
+            "sport_id": 6, "season_year": 2022, "game_date": "2022-01-15",
+            "home_score": 45, "away_score": 38, "status": "final",
+            "is_district": True, "is_playoff": False, "week_number": None,
+        },
+        {
+            "home_team_id": 100, "away_team_id": 200,
+            "sport_id": 6, "season_year": 2022, "game_date": "2022-01-22",
+            "home_score": 50, "away_score": 40, "status": "final",
+            "is_district": False, "is_playoff": False, "week_number": None,
+        },
+    ]
+    deduped, n_collisions = deduplicate_by_constraint(rows)
+    assert n_collisions == 0
+    assert len(deduped) == 2
+
+
+def test_post_resolution_dedup_empty_input_passes_through():
+    """Empty input → empty output, zero collisions. Trivial-but-real edge case
+    if a sport-year happens to have no matched games (e.g., a fresh season
+    with no scrapeable data yet)."""
+    from scripts.ingest_sports_historical import deduplicate_by_constraint
+    deduped, n_collisions = deduplicate_by_constraint([])
+    assert deduped == []
+    assert n_collisions == 0
+
+
+def test_post_resolution_dedup_richness_picker_score_dominates_metadata():
+    """If two rows differ in score completeness AND metadata, score wins."""
+    from scripts.ingest_sports_historical import deduplicate_by_constraint
+
+    row_complete_scores_no_meta = {
+        "home_team_id": 100, "away_team_id": 200,
+        "sport_id": 12, "season_year": 2024, "game_date": "2024-03-15",
+        "home_score": 5, "away_score": 3, "status": "final",
+        "is_district": False, "is_playoff": False, "week_number": None,
+    }
+    row_null_score_rich_meta = {
+        **row_complete_scores_no_meta,
+        "home_score": None,
+        "is_district": True,
+        "is_playoff": True,
+    }
+    # Order matters for tie-break verification; put the WRONG candidate
+    # second so a buggy "later-seen always wins" picker would fail this test
+    deduped, n_collisions = deduplicate_by_constraint(
+        [row_complete_scores_no_meta, row_null_score_rich_meta]
+    )
+    assert n_collisions == 1
+    assert len(deduped) == 1
+    assert deduped[0]["home_score"] == 5, \
+        "Score completeness must beat metadata richness when they conflict"
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — require live Supabase connection.
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")

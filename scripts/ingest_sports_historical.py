@@ -348,6 +348,12 @@ def deduplicate(rows: list[dict]) -> list[dict]:
     """
     Deduplicate games — lhsaaonline returns one row per school per game.
     Key: (sorted pair of names, date). Prefer Home perspective.
+
+    NOTE: this is a STRING-BASED first-pass dedup. It does NOT catch the
+    case where two rows have different school name spellings that both
+    resolve to the same DB team_id pair downstream. See
+    deduplicate_by_constraint() below for the post-resolution second pass
+    that closes that hole.
     """
     seen: dict[tuple, dict] = {}
     for row in rows:
@@ -359,6 +365,81 @@ def deduplicate(rows: list[dict]) -> list[dict]:
         elif row["home_away"] == "H":
             seen[key] = row
     return list(seen.values())
+
+
+def deduplicate_by_constraint(rows: list[dict]) -> tuple[list[dict], int]:
+    """Post-resolution second-pass dedup.
+
+    The string-based deduplicate() above keys on raw lhsaaonline school
+    names. After match_school() / B1.1 alias resolution, two rows with
+    different name spellings (e.g., "St. Mary's" vs "St Marys", or the
+    same game appearing in two classification filter sweeps under name
+    variants) can survive that pass and resolve to the SAME
+    (home_team_id, away_team_id, sport_id, season_year, game_date) tuple.
+
+    When that happens, the upsert chunk fails with Postgres error 21000
+    ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+
+    This pass dedupes by the exact constraint columns the upsert uses,
+    picking the richer survivor per collision group. Returns
+    (deduped_rows, n_collisions_resolved) so callers can log the rate —
+    a high rate is evidence of systematic source-side name-variation
+    drift that warrants a separate cleanup workstream.
+
+    Discovered 2026-05-28 when GBB 2022 crashed mid-upsert; the
+    deduplicate() above was the original string-dedup, this second pass
+    is the integrity guarantee for the new uq_games_matchup constraint.
+    """
+    by_constraint: dict[tuple, dict] = {}
+    n_collisions = 0
+    for row in rows:
+        key = (
+            row["home_team_id"], row["away_team_id"],
+            row["sport_id"], row["season_year"], row["game_date"],
+        )
+        existing = by_constraint.get(key)
+        if existing is None:
+            by_constraint[key] = row
+            continue
+        n_collisions += 1
+        if _is_richer_game_row(row, existing):
+            by_constraint[key] = row
+    return list(by_constraint.values()), n_collisions
+
+
+def _is_richer_game_row(candidate: dict, current: dict) -> bool:
+    """Returns True if `candidate` should replace `current` in the
+    post-resolution dedup. Ordering (descending priority):
+
+      1. status == 'final' wins
+      2. score completeness — number of non-NULL scores
+      3. metadata richness — is_district + is_playoff truthy + week_number non-NULL
+      4. tie → keep later-seen (return True on equal so the LATER source
+         row replaces the earlier one — a later classification filter
+         sweep is more likely to be the corrected/updated entry)
+
+    Mirrors the cleanup ORDER BY used in the 2026-05-28 Softball 2024
+    de-dupe (see migration dc98fac605a9 docstring).
+    """
+    def status_rank(r):
+        return 1 if r.get("status") == "final" else 0
+
+    def score_rank(r):
+        return ((r.get("home_score") is not None)
+                + (r.get("away_score") is not None))
+
+    def meta_rank(r):
+        return (int(bool(r.get("is_district")))
+                + int(bool(r.get("is_playoff")))
+                + (1 if r.get("week_number") is not None else 0))
+
+    if status_rank(candidate) != status_rank(current):
+        return status_rank(candidate) > status_rank(current)
+    if score_rank(candidate) != score_rank(current):
+        return score_rank(candidate) > score_rank(current)
+    if meta_rank(candidate) != meta_rank(current):
+        return meta_rank(candidate) > meta_rank(current)
+    return True  # equal — prefer later-seen
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +785,23 @@ def run_sport(sb, cfg: SportConfig, seasons: list[int], dry_run: bool,
                     "is_out_of_state": opp_state_code is not None,
                     "source": "lhsaaonline",
                 })
+
+            # 2026-05-28 (Workstream B1.2b followup): post-resolution dedup.
+            # The string-based deduplicate() at L347 keys on raw school names
+            # and can leak name-variant duplicates that resolve to the same
+            # team_id pair. This second pass closes that hole — without it,
+            # the upsert crashes with Postgres 21000 on within-batch dupes
+            # (discovered GBB 2022). Logs the collision count so source-side
+            # name-variation drift is visible. See task #90.
+            games_to_insert, n_within_batch_collisions = deduplicate_by_constraint(
+                games_to_insert
+            )
+            if n_within_batch_collisions > 0:
+                print(f"  Post-resolution dedup: collapsed "
+                      f"{n_within_batch_collisions} duplicate rows resolving "
+                      f"to the same team_id tuple "
+                      f"(likely lhsaaonline name-spelling variants and/or "
+                      f"cross-classification filter overlap).")
 
             print(f"  Games ready: {len(games_to_insert)}")
 
