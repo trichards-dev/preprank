@@ -85,6 +85,46 @@ def test_constraint_columns_match_scraper_on_conflict():
     )
 
 
+def test_football_games_constraint_columns_match_scraper_on_conflict():
+    """CI-enforced parity between Game uq_games_matchup and the FOOTBALL
+    scraper's on_conflict literal. Mirrors the sports-scraper drift test
+    above; ports the same B1.2b discipline to ingest_football_historical.py.
+
+    The football scraper is currently dormant — Football data was last
+    ingested before f35fc46 landed. This test exists from day one so any
+    future football scrape is guarded against the constraint-drift bug
+    class that B1.2b surfaced.
+    """
+    from app.models import Game
+    constraint = next(
+        c for c in Game.__table_args__
+        if isinstance(c, UniqueConstraint) and c.name == "uq_games_matchup"
+    )
+    constraint_cols = sorted(c.name for c in constraint.columns)
+
+    import scripts.ingest_football_historical as football_scraper
+    src = inspect.getsource(football_scraper.run)
+    # Find the games-table on_conflict literal specifically (the file has two:
+    # one for games, one for power_ratings — match on the games table).
+    games_block = re.search(
+        r'sb\.table\("games"\)\.upsert\(.*?on_conflict="([^"]+)"',
+        src,
+        re.DOTALL,
+    )
+    assert games_block is not None, (
+        "Football scraper run() has no games upsert with on_conflict — "
+        "has it been removed or refactored?"
+    )
+    scraper_cols = sorted(games_block.group(1).split(","))
+
+    assert constraint_cols == scraper_cols, (
+        f"DRIFT between Game uq_games_matchup columns and FOOTBALL scraper on_conflict:\n"
+        f"  constraint: {constraint_cols}\n"
+        f"  scraper:    {scraper_cols}\n"
+        f"Both must list home_team_id, away_team_id, sport_id, season_year, game_date."
+    )
+
+
 def test_power_ratings_constraint_columns_match_scraper_on_conflict():
     """CI-enforced parity between PowerRating uq_power_ratings_...'s columns
     and the on_conflict literal in calculate_and_store_ratings's power_ratings
@@ -134,6 +174,45 @@ def test_power_ratings_constraint_columns_match_scraper_on_conflict():
 
     assert constraint_cols == scraper_cols, (
         f"DRIFT between PowerRating uq_power_ratings_... columns and scraper on_conflict:\n"
+        f"  constraint: {constraint_cols}\n"
+        f"  scraper:    {scraper_cols}\n"
+        f"Both must list team_id, week_number, season_year, source, snapshot_date."
+    )
+
+
+def test_football_power_ratings_constraint_columns_match_scraper_on_conflict():
+    """CI-enforced parity between PowerRating uq_power_ratings_... columns
+    and the FOOTBALL scraper's power_ratings on_conflict literal. Mirrors
+    the sports-scraper power_ratings drift test above.
+
+    Same caveat as the sports power_ratings drift test: this catches
+    column-list drift but NOT semantic wrongness of the constraint design
+    itself. The 5-column NULLS NOT DISTINCT design (engine source=NULL,
+    lhsaa_official source=DATE) is documented in PowerRating model docstring.
+    """
+    from app.models import PowerRating
+    constraint = next(
+        c for c in PowerRating.__table_args__
+        if isinstance(c, UniqueConstraint)
+        and c.name == "uq_power_ratings_team_week_season_source_snapshot"
+    )
+    constraint_cols = sorted(c.name for c in constraint.columns)
+
+    import scripts.ingest_football_historical as football_scraper
+    src = inspect.getsource(football_scraper.calculate_and_store_ratings)
+    pr_block = re.search(
+        r'sb\.table\("power_ratings"\)\.upsert\(.*?on_conflict="([^"]+)"',
+        src,
+        re.DOTALL,
+    )
+    assert pr_block is not None, (
+        "Football scraper calculate_and_store_ratings has no power_ratings "
+        "upsert with on_conflict — has it been removed or refactored?"
+    )
+    scraper_cols = sorted(pr_block.group(1).split(","))
+
+    assert constraint_cols == scraper_cols, (
+        f"DRIFT between PowerRating uq_power_ratings_... columns and FOOTBALL scraper on_conflict:\n"
         f"  constraint: {constraint_cols}\n"
         f"  scraper:    {scraper_cols}\n"
         f"Both must list team_id, week_number, season_year, source, snapshot_date."

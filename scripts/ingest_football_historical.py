@@ -150,6 +150,13 @@ def deduplicate_games(rows: list[dict]) -> list[dict]:
     """
     lhsaaonline returns one row per team per game — deduplicate to one per game.
     Keep the 'Home' (H) row; synthesize from Away row if Home not present.
+
+    NOTE: this is a STRING-BASED first-pass dedup. It does NOT catch the
+    case where two rows have different school name spellings that both
+    resolve to the same DB team_id pair downstream. See
+    deduplicate_by_constraint() below for the post-resolution second pass
+    that closes that hole. Mirrors the same fix shipped for
+    scripts/ingest_sports_historical.py in commit e74aaa6.
     """
     # Key: frozenset of both names + date (independent of home/away ordering)
     seen: dict[tuple, dict] = {}
@@ -164,6 +171,75 @@ def deduplicate_games(rows: list[dict]) -> list[dict]:
             if row["home_away"] == "H":
                 seen[key] = row
     return list(seen.values())
+
+
+def deduplicate_by_constraint(rows: list[dict]) -> tuple[list[dict], int]:
+    """Post-resolution second-pass dedup for the football scraper.
+
+    Mirrors deduplicate_by_constraint() in scripts/ingest_sports_historical.py
+    (commit e74aaa6). The string-based deduplicate_games() above keys on raw
+    lhsaaonline school names. After match_school() / B1.1 alias resolution,
+    two rows with different name spellings can survive that pass and
+    resolve to the SAME (home_team_id, away_team_id, sport_id, season_year,
+    game_date) tuple. Without this second pass, the upsert chunk fails with
+    Postgres error 21000 ("ON CONFLICT DO UPDATE command cannot affect row
+    a second time").
+
+    Returns (deduped_rows, n_collisions_resolved) — collision count is
+    logged so source-side name-variation drift stays visible.
+
+    Football was dormant during the B1.2b 7-sport run, so this fix is
+    preventive: the next football scrape will use the new constraint
+    (uq_games_matchup from f35fc46) and would otherwise crash on its first
+    within-batch dup. Pairs with the upsert change at L536 area.
+    """
+    by_constraint: dict[tuple, dict] = {}
+    n_collisions = 0
+    for row in rows:
+        key = (
+            row["home_team_id"], row["away_team_id"],
+            row["sport_id"], row["season_year"], row["game_date"],
+        )
+        existing = by_constraint.get(key)
+        if existing is None:
+            by_constraint[key] = row
+            continue
+        n_collisions += 1
+        if _is_richer_game_row(row, existing):
+            by_constraint[key] = row
+    return list(by_constraint.values()), n_collisions
+
+
+def _is_richer_game_row(candidate: dict, current: dict) -> bool:
+    """Mirrors _is_richer_game_row() in ingest_sports_historical.py (e74aaa6).
+    Ordering (descending priority):
+
+      1. status == 'final' wins
+      2. score completeness — number of non-NULL scores
+      3. metadata richness — is_district + is_playoff truthy + week_number non-NULL
+      4. tie → keep later-seen (return True on equal so the LATER source
+         row replaces the earlier one — a later week-fetch sweep is more
+         likely to be the corrected/updated entry)
+    """
+    def status_rank(r):
+        return 1 if r.get("status") == "final" else 0
+
+    def score_rank(r):
+        return ((r.get("home_score") is not None)
+                + (r.get("away_score") is not None))
+
+    def meta_rank(r):
+        return (int(bool(r.get("is_district")))
+                + int(bool(r.get("is_playoff")))
+                + (1 if r.get("week_number") is not None else 0))
+
+    if status_rank(candidate) != status_rank(current):
+        return status_rank(candidate) > status_rank(current)
+    if score_rank(candidate) != score_rank(current):
+        return score_rank(candidate) > score_rank(current)
+    if meta_rank(candidate) != meta_rank(current):
+        return meta_rank(candidate) > meta_rank(current)
+    return True  # equal — prefer later-seen
 
 
 def week_number(week_str: str) -> int | None:
@@ -301,7 +377,7 @@ def calculate_and_store_ratings(sb, sport_id: int, season_year: int,
 
     # Load school names
     school_ids = list({r["school_id"] for r in teams_res.data})
-    schools_res = sb.table("schools").select("id,name,classification").in_("id", school_ids).execute()
+    schools_res = sb.table("schools").select("id,name,classification,parish").in_("id", school_ids).execute()
     school_info = {r["id"]: r for r in schools_res.data}
 
     # Build TeamRecord objects
@@ -309,6 +385,17 @@ def calculate_and_store_ratings(sb, sport_id: int, season_year: int,
     for tid, tinfo in team_info.items():
         sid = tinfo["school_id"]
         sch = school_info.get(sid, {})
+        # 2026-05-29 (Workstream B1.2c, mirrors B1.2b Option B for sports
+        # scraper): OOS schools have parish like 'OOS-XX' and
+        # classification=NULL. Their games are already filtered out of
+        # game_results below. Skip them here so they never enter
+        # team_records — otherwise the NULL classification crashes
+        # TeamRecord pydantic validation.
+        # Belt-and-suspenders: also catches in-state placeholder rows with
+        # NULL classification (e.g., "Applied for Membership" entries) that
+        # would still crash pydantic on the same NULL-classification door.
+        if (sch.get("parish") or "").startswith("OOS") or not sch.get("classification"):
+            continue
         team_records[tid] = TeamRecord(
             team_id=tid,
             school_name=sch.get("name", f"school_{sid}"),
@@ -389,8 +476,16 @@ def calculate_and_store_ratings(sb, sport_id: int, season_year: int,
     # Batch into chunks of 200
     for i in range(0, len(ratings_payload), 200):
         chunk = ratings_payload[i:i+200]
+        # 2026-05-29 (Workstream B1.2c, mirrors B1.2b): on_conflict columns
+        # MUST match power_ratings.uq_power_ratings_team_week_season_source_snapshot
+        # at apps/api/app/models.py PowerRating.__table_args__ (5 columns,
+        # NULLS NOT DISTINCT). Football engine path writes source='engine' +
+        # snapshot_date=NULL; NULLS NOT DISTINCT semantics make reruns upsert
+        # in place. CI enforcement:
+        # test_b1_2b_bundle.test_football_power_ratings_constraint_columns_match_scraper_on_conflict.
         sb.table("power_ratings").upsert(
-            chunk, on_conflict="team_id,week_number,season_year"
+            chunk,
+            on_conflict="team_id,week_number,season_year,source,snapshot_date",
         ).execute()
     print(f"  Done. Top 3: {sorted(ratings_payload, key=lambda r: r['power_rating'], reverse=True)[:3]}")
 
@@ -523,6 +618,23 @@ def run(seasons: list[int], dry_run: bool, skip_ratings: bool):
                     "source": "lhsaaonline",
                 })
 
+            # 2026-05-29 (Workstream B1.2c, mirrors B1.2b followup): post-
+            # resolution dedup. The string-based deduplicate_games() above
+            # keys on raw school names and can leak name-variant duplicates
+            # that resolve to the same team_id pair. This second pass closes
+            # that hole — without it, the upsert below crashes with Postgres
+            # 21000 on within-batch dupes. Logs the collision count so
+            # source-side name-variation drift is visible. See e74aaa6.
+            games_to_insert, n_within_batch_collisions = deduplicate_by_constraint(
+                games_to_insert
+            )
+            if n_within_batch_collisions > 0:
+                print(f"  Post-resolution dedup: collapsed "
+                      f"{n_within_batch_collisions} duplicate rows resolving "
+                      f"to the same team_id tuple "
+                      f"(likely lhsaaonline name-spelling variants and/or "
+                      f"cross-week-filter overlap).")
+
             print(f"  Games ready to insert: {len(games_to_insert)}")
 
             if dry_run:
@@ -533,10 +645,22 @@ def run(seasons: list[int], dry_run: bool, skip_ratings: bool):
                 print(f"  Inserting {len(games_to_insert)} games in batches...")
                 for i in range(0, len(games_to_insert), 200):
                     chunk = games_to_insert[i:i+200]
-                    sb.table("games").insert(chunk).execute()
-                    print(f"    Inserted batch {i//200 + 1} ({len(chunk)} rows)")
+                    # 2026-05-29 (Workstream B1.2c): upsert (not insert) so
+                    # the football scraper is idempotent against
+                    # uq_games_matchup (apps/api/app/models.py Game.__table_args__,
+                    # migration dc98fac605a9). on_conflict columns MUST match.
+                    # CI enforcement:
+                    # test_b1_2b_bundle.test_football_games_constraint_columns_match_scraper_on_conflict.
+                    sb.table("games").upsert(
+                        chunk,
+                        on_conflict="home_team_id,away_team_id,sport_id,season_year,game_date",
+                    ).execute()
+                    print(f"    Upserted batch {i//200 + 1} ({len(chunk)} rows)")
                 total_inserted += len(games_to_insert)
-                print(f"  Season {season_year}: {len(games_to_insert)} games inserted.")
+                # Count is rows-attempted, not new-rows-created. On idempotent
+                # re-runs this number stays the same but the DB row count won't grow.
+                print(f"  Season {season_year}: {len(games_to_insert)} games upsert-attempted "
+                      f"(existing rows update in place via uq_games_matchup).")
 
             if not skip_ratings and not dry_run:
                 calculate_and_store_ratings(sb, FOOTBALL_SPORT_ID, season_year,
