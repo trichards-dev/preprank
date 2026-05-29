@@ -1810,6 +1810,9 @@ PHASE6_PINNED_INDICES = (3,)                # same fit config as Phase 5
 PHASE6_SLOPE_BAND: tuple[float, float] = (0.85, 1.15)
 PHASE6_MAX_BIN_GAP: float = 0.05
 PHASE6_MIN_BIN_N: int = 10                  # ignore tiny bins (pure noise)
+PHASE6_KFOLD_K: int = 5                     # K-fold CV within holdout for isotonic
+PHASE6_TAIL_DECILE_GAP: float = 0.05        # auto-slip threshold on D1 and D10
+                                            # (per decisions.md 2026-05-26 evening)
 
 
 @dataclass
@@ -1836,13 +1839,26 @@ class Phase6SportResult:
     raw_slope_in_band: bool
     raw_bins: list[Phase6BinReliability] = field(default_factory=list)
     raw_n_bins_exceeding_gap: int = 0
-    # Post-isotonic (only populated when isotonic_applied=True)
+    # Post-isotonic via K-fold CV within holdout (only populated when isotonic_applied=True)
     isotonic_applied: bool = False
+    isotonic_kfold_k: int = 0               # K used for CV; 0 if not applied
     isotonic_slope: float = 0.0
     isotonic_intercept: float = 0.0
     isotonic_slope_in_band: bool = False
     isotonic_bins: list[Phase6BinReliability] = field(default_factory=list)
     isotonic_n_bins_exceeding_gap: int = 0
+    # Tail-bin flags (D1 = bin 0.0-0.1, D10 = bin 0.9-1.0) for auto-slip rule.
+    # decisions.md 2026-05-26 evening: auto-slip fires on |predicted - observed|
+    # > threshold in tail deciles AFTER isotonic recalibration.
+    raw_d1_gap: float = 0.0
+    raw_d10_gap: float = 0.0
+    raw_d1_n: int = 0
+    raw_d10_n: int = 0
+    isotonic_d1_gap: float = 0.0
+    isotonic_d10_gap: float = 0.0
+    isotonic_d1_n: int = 0
+    isotonic_d10_n: int = 0
+    tail_miscalibration_after_isotonic: bool = False  # the auto-slip trigger
     # Verdict
     passes_acceptance: bool = False         # both slope-in-band AND no exceeding bins on the final state
 
@@ -1859,6 +1875,78 @@ class Phase6Result:
     n_passing: int = 0
     n_failing: int = 0
     fit_warnings: list[str] = field(default_factory=list)
+
+
+def _tail_gaps(bins: list["Phase6BinReliability"]) -> tuple[float, float, int, int]:
+    """Return (d1_gap, d10_gap, d1_n, d10_n) from a Phase6BinReliability list.
+
+    Tail deciles per decisions.md 2026-05-26 evening: D1 = bin [0.0, 0.1),
+    D10 = bin [0.9, 1.0]. Empty bins report gap=0.0, n=0.
+    """
+    if not bins:
+        return 0.0, 0.0, 0, 0
+    d1 = bins[0]
+    d10 = bins[-1]
+    d1_g = d1.abs_gap if d1.n_games > 0 else 0.0
+    d10_g = d10.abs_gap if d10.n_games > 0 else 0.0
+    return d1_g, d10_g, d1.n_games, d10.n_games
+
+
+def _kfold_indices(n: int, k: int, seed: int) -> list[list[int]]:
+    """Deterministic K-fold index split.
+
+    Shuffles 0..n-1 using a seeded random.Random and splits into K
+    near-equal folds. Returns a list of K lists, each containing the
+    indices in that fold.
+    """
+    import random as _random
+    rng = _random.Random(seed)
+    idx = list(range(n))
+    rng.shuffle(idx)
+    folds: list[list[int]] = [[] for _ in range(k)]
+    for i, original_idx in enumerate(idx):
+        folds[i % k].append(original_idx)
+    return folds
+
+
+def _kfold_isotonic_recalibrate(
+    preds_probs: list[float],
+    preds_actuals: list[int],
+    *,
+    k: int,
+    seed: int,
+) -> list[float]:
+    """K-fold CV within holdout: fit isotonic on K-1 folds, apply to held-out fold.
+
+    For each fold i:
+      - fit_probs/fit_actuals = all (preds_probs, preds_actuals) except fold i
+      - Fit IsotonicRegressor on (fit_probs, fit_actuals)
+      - Apply to preds_probs[fold i] → recalibrated_probs at those indices
+    Returns recalibrated_probs aligned to the original preds_probs ordering.
+
+    Each prediction is recalibrated by an isotonic mapping fit on the OTHER
+    K-1 folds — never on its own fold. Honest measurement.
+    """
+    from .calibration import IsotonicRegressor
+    n = len(preds_probs)
+    if n == 0 or n != len(preds_actuals):
+        return list(preds_probs)
+    folds = _kfold_indices(n, k, seed)
+    recal: list[float] = [0.0] * n
+    for i, fold in enumerate(folds):
+        fit_idx = [j for j in range(n) if j not in set(fold)]
+        if not fit_idx or not fold:
+            for j in fold:
+                recal[j] = preds_probs[j]
+            continue
+        fit_probs = [preds_probs[j] for j in fit_idx]
+        fit_actuals = [preds_actuals[j] for j in fit_idx]
+        iso = IsotonicRegressor.fit(fit_probs, fit_actuals)
+        eval_probs = [preds_probs[j] for j in fold]
+        applied = iso.transform(eval_probs)
+        for orig_j, new_p in zip(fold, applied):
+            recal[orig_j] = float(new_p)
+    return recal
 
 
 def _bins_to_phase6(bins: list[dict]) -> tuple[list[Phase6BinReliability], int]:
@@ -2035,48 +2123,77 @@ def run_phase6_calibration(
             raw_n_bins_exceeding_gap=raw_exceed,
         )
 
-        needs_iso = needs_recalibration(raw_cal, slope_band=PHASE6_SLOPE_BAND) or (raw_exceed > 0)
+        # Tail flags on the RAW state
+        r_d1, r_d10, r_d1_n, r_d10_n = _tail_gaps(raw_bins)
+        sport_result.raw_d1_gap = r_d1
+        sport_result.raw_d10_gap = r_d10
+        sport_result.raw_d1_n = r_d1_n
+        sport_result.raw_d10_n = r_d10_n
 
-        if needs_iso:
-            sport_result.isotonic_applied = True
-            iso = IsotonicRegressor.fit(preds_probs, preds_actuals)
-            iso_probs = iso.transform(preds_probs)
+        # ALWAYS run K-fold CV isotonic per decisions.md 2026-05-26 evening:
+        # "even after isotonic recalibration is fit + applied" — the
+        # post-iso state IS the gate, regardless of whether the raw state
+        # would have passed. Volleyball-style "raw passes" still gets
+        # isotonic to confirm post-iso state holds.
+        sport_result.isotonic_applied = True
+        sport_result.isotonic_kfold_k = PHASE6_KFOLD_K
+        iso_probs = _kfold_isotonic_recalibrate(
+            preds_probs, preds_actuals, k=PHASE6_KFOLD_K, seed=seed,
+        )
 
-            # Re-derive PredictionRecords with recalibrated home_win_probability
-            from .predictor import PredictionRecord as _PR
-            recal_preds: list[PredictionRecord] = []
-            for orig, new_p in zip(preds, iso_probs):
-                recal_preds.append(_PR(
-                    game_id=orig.game_id,
-                    home_team_id=orig.home_team_id,
-                    away_team_id=orig.away_team_id,
-                    home_win_probability=float(new_p),
-                    predicted_home_score=orig.predicted_home_score,
-                    predicted_away_score=orig.predicted_away_score,
-                    predicted_spread=orig.predicted_spread,
-                    home_rating_pregame=orig.home_rating_pregame,
-                    away_rating_pregame=orig.away_rating_pregame,
-                    home_cold_start=orig.home_cold_start,
-                    away_cold_start=orig.away_cold_start,
-                    actual_home_won=orig.actual_home_won,
-                    sport=orig.sport,
-                    season_year=orig.season_year,
-                    week_number=orig.week_number,
-                ))
-            iso_cal = calibration_slope_intercept(iso_probs, preds_actuals)
-            iso_bins_raw = _reliability_bins(recal_preds, n_bins=n_bins)
-            iso_bins, iso_exceed = _bins_to_phase6(iso_bins_raw)
-            iso_in_band = (PHASE6_SLOPE_BAND[0] <= iso_cal.slope <= PHASE6_SLOPE_BAND[1])
+        # Re-derive PredictionRecords with recalibrated home_win_probability
+        from .predictor import PredictionRecord as _PR
+        recal_preds: list[PredictionRecord] = []
+        for orig, new_p in zip(preds, iso_probs):
+            recal_preds.append(_PR(
+                game_id=orig.game_id,
+                home_team_id=orig.home_team_id,
+                away_team_id=orig.away_team_id,
+                home_win_probability=float(new_p),
+                predicted_home_score=orig.predicted_home_score,
+                predicted_away_score=orig.predicted_away_score,
+                predicted_spread=orig.predicted_spread,
+                home_rating_pregame=orig.home_rating_pregame,
+                away_rating_pregame=orig.away_rating_pregame,
+                home_cold_start=orig.home_cold_start,
+                away_cold_start=orig.away_cold_start,
+                actual_home_won=orig.actual_home_won,
+                sport=orig.sport,
+                season_year=orig.season_year,
+                week_number=orig.week_number,
+            ))
+        iso_cal = calibration_slope_intercept(iso_probs, preds_actuals)
+        iso_bins_raw = _reliability_bins(recal_preds, n_bins=n_bins)
+        iso_bins, iso_exceed = _bins_to_phase6(iso_bins_raw)
+        iso_in_band = (PHASE6_SLOPE_BAND[0] <= iso_cal.slope <= PHASE6_SLOPE_BAND[1])
 
-            sport_result.isotonic_slope = iso_cal.slope
-            sport_result.isotonic_intercept = iso_cal.intercept
-            sport_result.isotonic_slope_in_band = iso_in_band
-            sport_result.isotonic_bins = iso_bins
-            sport_result.isotonic_n_bins_exceeding_gap = iso_exceed
+        sport_result.isotonic_slope = iso_cal.slope
+        sport_result.isotonic_intercept = iso_cal.intercept
+        sport_result.isotonic_slope_in_band = iso_in_band
+        sport_result.isotonic_bins = iso_bins
+        sport_result.isotonic_n_bins_exceeding_gap = iso_exceed
 
-            sport_result.passes_acceptance = iso_in_band and (iso_exceed == 0)
-        else:
-            sport_result.passes_acceptance = raw_in_band and (raw_exceed == 0)
+        # Tail flags on the post-isotonic state — the auto-slip trigger
+        i_d1, i_d10, i_d1_n, i_d10_n = _tail_gaps(iso_bins)
+        sport_result.isotonic_d1_gap = i_d1
+        sport_result.isotonic_d10_gap = i_d10
+        sport_result.isotonic_d1_n = i_d1_n
+        sport_result.isotonic_d10_n = i_d10_n
+
+        # Auto-slip trigger per decisions.md 2026-05-26 evening:
+        # tail decile gap > PHASE6_TAIL_DECILE_GAP after isotonic AND tail
+        # has enough data (n >= PHASE6_MIN_BIN_N) to be meaningful.
+        d1_fires = (i_d1 > PHASE6_TAIL_DECILE_GAP) and (i_d1_n >= PHASE6_MIN_BIN_N)
+        d10_fires = (i_d10 > PHASE6_TAIL_DECILE_GAP) and (i_d10_n >= PHASE6_MIN_BIN_N)
+        sport_result.tail_miscalibration_after_isotonic = bool(d1_fires or d10_fires)
+
+        # PASS = post-isotonic slope-in-band AND no exceeding bins AND
+        # no tail miscalibration. The auto-slip trigger is the tail flag.
+        sport_result.passes_acceptance = (
+            iso_in_band
+            and (iso_exceed == 0)
+            and not sport_result.tail_miscalibration_after_isotonic
+        )
 
         result.sports[sport_name] = sport_result
         if sport_result.passes_acceptance:

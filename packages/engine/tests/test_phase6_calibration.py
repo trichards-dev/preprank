@@ -157,3 +157,120 @@ def test_bins_to_phase6_counts_multiple_exceeding_bins():
     out, n_exceed = _bins_to_phase6(bins_in)
     assert n_exceed == 2
     assert [b.exceeds_max_gap for b in out] == [True, False, True]
+
+
+# ---------------------------------------------------------------------------
+# K-fold CV within holdout isotonic (decisions.md 2026-05-26 evening)
+# ---------------------------------------------------------------------------
+from engine.validator.runner_v2 import (
+    PHASE6_KFOLD_K,
+    PHASE6_TAIL_DECILE_GAP,
+    _kfold_indices,
+    _kfold_isotonic_recalibrate,
+    _tail_gaps,
+)
+
+
+def test_phase6_kfold_k_default_is_5():
+    """5-fold is the standard CV default."""
+    assert PHASE6_KFOLD_K == 5
+
+
+def test_phase6_tail_decile_gap_default_is_0_05():
+    """decisions.md 2026-05-26 evening auto-slip threshold on tails."""
+    assert PHASE6_TAIL_DECILE_GAP == 0.05
+
+
+def test_kfold_indices_partitions_all_indices_with_no_overlap():
+    """Every index 0..n-1 appears in exactly one fold."""
+    folds = _kfold_indices(n=100, k=5, seed=42)
+    assert len(folds) == 5
+    flat = sorted(idx for fold in folds for idx in fold)
+    assert flat == list(range(100))
+
+
+def test_kfold_indices_balanced_within_one():
+    """Fold sizes differ by at most 1."""
+    folds = _kfold_indices(n=100, k=5, seed=42)
+    sizes = sorted(len(f) for f in folds)
+    assert sizes[-1] - sizes[0] <= 1
+
+
+def test_kfold_indices_deterministic_with_seed():
+    """Same seed → same partition (reproducibility)."""
+    f1 = _kfold_indices(n=100, k=5, seed=42)
+    f2 = _kfold_indices(n=100, k=5, seed=42)
+    assert f1 == f2
+
+
+def test_kfold_isotonic_recalibrate_preserves_length():
+    probs = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+    actuals = [0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+    out = _kfold_isotonic_recalibrate(probs, actuals, k=5, seed=42)
+    assert len(out) == len(probs)
+
+
+def test_kfold_isotonic_recalibrate_empty_input():
+    """No data → empty output (don't crash)."""
+    out = _kfold_isotonic_recalibrate([], [], k=5, seed=42)
+    assert out == []
+
+
+def test_kfold_isotonic_recalibrate_uses_other_folds_only():
+    """Each prediction's recalibrated value must NOT come from a self-fit.
+
+    Set up a non-monotone toy distribution and verify the recalibrated
+    values differ from the trivial-self-fit values. A weak invariant
+    but a meaningful smoke against the prior self-fit bug.
+    """
+    # 20 predictions across [0, 1] with mostly correct actuals
+    probs = [i / 20.0 for i in range(20)]
+    actuals = [1 if p > 0.5 else 0 for p in probs]
+    out = _kfold_isotonic_recalibrate(probs, actuals, k=5, seed=42)
+    # The K-fold output should differ from the input on at least some
+    # values (input is well-calibrated by construction; isotonic on
+    # fold-of-4 will produce piecewise-constant values that don't match
+    # the linear input).
+    differences = sum(1 for p, o in zip(probs, out) if abs(p - o) > 1e-9)
+    assert differences > 0, "K-fold isotonic returned identity — possible self-fit regression"
+
+
+def test_tail_gaps_empty_bins_returns_zeros():
+    assert _tail_gaps([]) == (0.0, 0.0, 0, 0)
+
+
+def test_tail_gaps_returns_d1_and_d10_correctly():
+    """D1 = first bin (index 0); D10 = last bin (index -1)."""
+    bins = [
+        Phase6BinReliability(bin_lower=0.0, bin_upper=0.1,
+                              mean_predicted=0.05, mean_observed=0.12,
+                              n_games=20, abs_gap=0.07, exceeds_max_gap=True),
+        Phase6BinReliability(bin_lower=0.1, bin_upper=0.2,
+                              mean_predicted=0.15, mean_observed=0.18,
+                              n_games=15, abs_gap=0.03, exceeds_max_gap=False),
+        Phase6BinReliability(bin_lower=0.9, bin_upper=1.0,
+                              mean_predicted=0.95, mean_observed=0.80,
+                              n_games=10, abs_gap=0.15, exceeds_max_gap=True),
+    ]
+    d1, d10, d1_n, d10_n = _tail_gaps(bins)
+    assert d1 == pytest.approx(0.07)
+    assert d10 == pytest.approx(0.15)
+    assert d1_n == 20
+    assert d10_n == 10
+
+
+def test_tail_gaps_empty_bin_treated_as_zero_gap():
+    """Empty tail bins (n=0) report gap=0.0 — they can't fire auto-slip."""
+    bins = [
+        Phase6BinReliability(bin_lower=0.0, bin_upper=0.1,
+                              mean_predicted=float("nan"), mean_observed=float("nan"),
+                              n_games=0, abs_gap=0.0, exceeds_max_gap=False),
+        Phase6BinReliability(bin_lower=0.9, bin_upper=1.0,
+                              mean_predicted=float("nan"), mean_observed=float("nan"),
+                              n_games=0, abs_gap=0.0, exceeds_max_gap=False),
+    ]
+    d1, d10, d1_n, d10_n = _tail_gaps(bins)
+    assert d1 == 0.0
+    assert d10 == 0.0
+    assert d1_n == 0
+    assert d10_n == 0

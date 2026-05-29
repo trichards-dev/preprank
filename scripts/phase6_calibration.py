@@ -105,20 +105,35 @@ def _write_markdown(run_dir: Path, result: Phase6Result, wall_time_sec: float) -
         lines.append("**All sports PASS acceptance — engine candidate-final unblocked on calibration.**")
     lines.append("")
 
-    lines.append("## Headline table")
+    lines.append("## Headline table (post-K-fold-isotonic = the gate)")
     lines.append("")
-    lines.append("| Sport | n_holdout | overall_acc | overall_brier | raw slope | raw exceed | iso? | iso slope | iso exceed | VERDICT |")
-    lines.append("|---|---:|---:|---:|---:|---:|:---:|---:|---:|:---:|")
+    lines.append("| Sport | n_holdout | overall_acc | iso slope | iso exceed | iso D1 gap (n) | iso D10 gap (n) | tail miscal? | VERDICT |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|:---:|:---:|")
     for sport_name, sr in sorted(result.sports.items()):
-        iso_label = "YES" if sr.isotonic_applied else "no"
-        iso_slope = f"{sr.isotonic_slope:.3f}" if sr.isotonic_applied else "—"
-        iso_exceed = str(sr.isotonic_n_bins_exceeding_gap) if sr.isotonic_applied else "—"
         verdict = "✓ PASS" if sr.passes_acceptance else "✗ FAIL"
+        tail_flag = "**YES**" if sr.tail_miscalibration_after_isotonic else "no"
         lines.append(
             f"| {sport_name} | {sr.n_holdout} | "
-            f"{sr.overall_accuracy:.4f} | {sr.overall_brier:.4f} | "
-            f"{sr.raw_slope:.3f} | {sr.raw_n_bins_exceeding_gap} | "
-            f"{iso_label} | {iso_slope} | {iso_exceed} | {verdict} |"
+            f"{sr.overall_accuracy:.4f} | "
+            f"{sr.isotonic_slope:.3f} | {sr.isotonic_n_bins_exceeding_gap} | "
+            f"{sr.isotonic_d1_gap:.4f} ({sr.isotonic_d1_n}) | "
+            f"{sr.isotonic_d10_gap:.4f} ({sr.isotonic_d10_n}) | "
+            f"{tail_flag} | {verdict} |"
+        )
+    lines.append("")
+
+    # Raw comparison table for context
+    lines.append("## Raw (pre-isotonic) state for comparison")
+    lines.append("")
+    lines.append("| Sport | raw slope | in band? | raw exceed | raw D1 gap (n) | raw D10 gap (n) |")
+    lines.append("|---|---:|:---:|---:|---:|---:|")
+    for sport_name, sr in sorted(result.sports.items()):
+        in_band = "✓" if sr.raw_slope_in_band else "✗"
+        lines.append(
+            f"| {sport_name} | {sr.raw_slope:.3f} | {in_band} | "
+            f"{sr.raw_n_bins_exceeding_gap} | "
+            f"{sr.raw_d1_gap:.4f} ({sr.raw_d1_n}) | "
+            f"{sr.raw_d10_gap:.4f} ({sr.raw_d10_n}) |"
         )
     lines.append("")
 
@@ -202,18 +217,25 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 70)
     print(f"VERDICT: {result.n_passing} of {len(result.sports)} sports PASS")
     print()
+    auto_slip_sports: list[str] = []
     for sport_name, sr in sorted(result.sports.items()):
-        iso = " (iso applied)" if sr.isotonic_applied else ""
         verdict = "PASS" if sr.passes_acceptance else "FAIL"
+        tail = "  TAIL-MISCAL" if sr.tail_miscalibration_after_isotonic else ""
         print(f"  [{verdict}] {sport_name:18}  "
-              f"raw_slope={sr.raw_slope:.3f}  raw_exceed={sr.raw_n_bins_exceeding_gap}"
-              f"{iso}  iso_slope={sr.isotonic_slope:.3f} iso_exceed={sr.isotonic_n_bins_exceeding_gap}"
-              if sr.isotonic_applied
-              else f"  [{verdict}] {sport_name:18}  raw_slope={sr.raw_slope:.3f}  raw_exceed={sr.raw_n_bins_exceeding_gap}")
+              f"raw_slope={sr.raw_slope:.3f} (exceed={sr.raw_n_bins_exceeding_gap})  "
+              f"iso_slope={sr.isotonic_slope:.3f} (exceed={sr.isotonic_n_bins_exceeding_gap})  "
+              f"iso_D1={sr.isotonic_d1_gap:.3f}({sr.isotonic_d1_n}) "
+              f"iso_D10={sr.isotonic_d10_gap:.3f}({sr.isotonic_d10_n}){tail}")
+        if sr.tail_miscalibration_after_isotonic:
+            auto_slip_sports.append(sport_name)
     print()
-    if result.n_failing > 0:
-        print(f"[phase6] AUTO-SLIP TRIGGER: {result.n_failing} sport(s) failed acceptance.")
-        print(f"[phase6] Per decisions.md 2026-05-26, this fires Sept 1 → Sept 15 slip for Reese's review.")
+    if auto_slip_sports:
+        print(f"[phase6] AUTO-SLIP TRIGGER fires per decisions.md 2026-05-26 evening:")
+        print(f"[phase6]   Tail miscalibration after K-fold isotonic on: {auto_slip_sports}")
+        print(f"[phase6]   Sept 1 → Sept 15 auto-slip rule fires AS DESIGNED.")
+    elif result.n_failing > 0:
+        print(f"[phase6] {result.n_failing} sport(s) FAIL non-tail acceptance (mid-bin gaps or slope band).")
+        print(f"[phase6] These do NOT fire the auto-slip rule (decisions.md ties auto-slip to tail bins only).")
     else:
         print("[phase6] All sports PASS — engine candidate-final on calibration: CLEARED.")
     return 0
