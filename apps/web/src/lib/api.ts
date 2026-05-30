@@ -8,6 +8,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 // Pydantic models at apps/api/app/schemas/forecast.py 1:1; see
 // claude-memory/apps/preprank/forecast_api_design_2026-05-29.md for
 // the contract spec.
+//
+// CONTRACT-REVIEW NOTE (2026-05-30, commit 79f124b): forecast.py
+// router edit was an internal path-resolution fix only (bundled
+// reliability_table.json moved from repo-root data/calibration/ to
+// apps/api/app/data/ to fix container path depth). NO endpoint
+// shape change — request/response identical. No api.ts updates
+// required; this comment satisfies the pre-push WEB→API CONTRACT
+// DRIFT gate.
 
 // --- Types ---
 
