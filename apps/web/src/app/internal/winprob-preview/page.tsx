@@ -18,6 +18,7 @@ interface CaseSpec {
   forecast: ForecastBlock | null;
   forecastUnavailableReason?: ForecastUnavailableReason | null;
   sourceDataCaveat?: SourceDataCaveat | null;
+  hideTeamNames?: boolean;
 }
 
 const COMPACT_CASES: CaseSpec[] = [
@@ -122,6 +123,35 @@ const EXPANDED_CASES: CaseSpec[] = [
   },
 ];
 
+const HIDE_TEAM_NAME_CASES: CaseSpec[] = [
+  {
+    caption: "k · Confident pick (compact, hideTeamNames=true)",
+    homeTeamName: "North Caddo",
+    awayTeamName: "Airline",
+    forecast: {
+      home_win_probability: 89,
+      home_win_probability_ci_low: 86,
+      home_win_probability_ci_high: 92,
+      confidence_tier: "confident_pick",
+      confidence_tier_label: "Confident pick",
+    },
+    hideTeamNames: true,
+  },
+  {
+    caption: "l · Lean (compact, hideTeamNames=true)",
+    homeTeamName: "John Ehret",
+    awayTeamName: "Jefferson Rise Charter",
+    forecast: {
+      home_win_probability: 44,
+      home_win_probability_ci_low: 35,
+      home_win_probability_ci_high: 53,
+      confidence_tier: "lean",
+      confidence_tier_label: "Lean",
+    },
+    hideTeamNames: true,
+  },
+];
+
 const SPECIAL_CASES: CaseSpec[] = [
   {
     caption: "i · Forecast unavailable (Recently scheduled)",
@@ -168,6 +198,7 @@ function PreviewCard({
         forecastUnavailableReason={spec.forecastUnavailableReason}
         sourceDataCaveat={spec.sourceDataCaveat}
         variant={variant}
+        hideTeamNames={spec.hideTeamNames}
       />
     </div>
   );
@@ -206,6 +237,17 @@ export default function WinProbPreviewPage() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {EXPANDED_CASES.map((spec) => (
               <PreviewCard key={spec.caption} spec={spec} variant="expanded" />
+            ))}
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h2 className="font-display text-xl font-semibold uppercase tracking-wide text-white">
+            hideTeamNames variant (used by GameCard nesting)
+          </h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {HIDE_TEAM_NAME_CASES.map((spec) => (
+              <PreviewCard key={spec.caption} spec={spec} variant="compact" />
             ))}
           </div>
         </section>

@@ -82,3 +82,22 @@ the bar reads intuitively without statistical literacy required.
 - `apps/web/src/components/WinProbabilityWithCI.tsx` — the primitive
 - `apps/web/src/app/internal/winprob-preview/page.tsx` — preview route
   source (sample data hard-coded for reproducibility)
+
+## Update 2026-05-30 (later same day): hideTeamNames prop added
+
+After Phase 3.3.1 integration of WinProbabilityWithCI into GameCard
+surfaced a team-name duplication issue (see
+`docs/audits/gamecard_preview_screenshots_2026-05-30/README.md`),
+WinProbabilityWithCI gained an opt-in `hideTeamNames` prop. The
+preview route was extended with new cases k/l demonstrating the
+hideTeamNames=true variant.
+
+| File | What it shows |
+|---|---|
+| `composite.png` (v1) | Original 10-state grid (4 tiers × compact/expanded + unavailable + Baseball caveat) — team names always visible. Approved 2026-05-30. |
+| `composite_v2_hideTeamNames.png` | Extended grid: same 10 states + new k/l hideTeamNames states (Confident pick + Lean). Documents the prop in the audit artifact. |
+
+The `hideTeamNames` prop default is `false`, so standalone consumers
+(game detail page, methodology page, premium drawer) keep the
+original layout. Only GameCard.tsx (and any future nested consumer)
+passes `hideTeamNames={true}`.

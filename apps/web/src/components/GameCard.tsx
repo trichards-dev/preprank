@@ -1,12 +1,15 @@
 import Link from "next/link";
-import type { Game } from "@/lib/api";
+import type { Game, GameForecast } from "@/lib/api";
+import WinProbabilityWithCI from "@/components/WinProbabilityWithCI";
 
 interface GameCardProps {
   game: Game;
+  forecast?: GameForecast | null;
 }
 
-export default function GameCard({ game }: GameCardProps) {
+export default function GameCard({ game, forecast }: GameCardProps) {
   const isFinal = game.status === "final";
+  const showForecast = !isFinal && forecast !== undefined;
 
   return (
     <Link
@@ -43,6 +46,20 @@ export default function GameCard({ game }: GameCardProps) {
           </span>
         </div>
       </div>
+
+      {showForecast && (
+        <div className="mt-3 border-t border-steel-gray/20 pt-3">
+          <WinProbabilityWithCI
+            homeTeamName={game.home_team_name || `Team #${game.home_team_id}`}
+            awayTeamName={game.away_team_name || `Team #${game.away_team_id}`}
+            forecast={forecast?.forecast ?? null}
+            forecastUnavailableReason={forecast?.forecast_unavailable_reason ?? null}
+            sourceDataCaveat={forecast?.source_data_caveat ?? null}
+            variant="compact"
+            hideTeamNames
+          />
+        </div>
+      )}
 
       {game.game_date && (
         <div className="mt-2 text-xs text-steel-gray">

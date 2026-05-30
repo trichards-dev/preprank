@@ -13,6 +13,7 @@ interface WinProbabilityWithCIProps {
   forecastUnavailableReason?: ForecastUnavailableReason | null;
   sourceDataCaveat?: SourceDataCaveat | null;
   variant?: Variant;
+  hideTeamNames?: boolean;
 }
 
 const UNAVAILABLE_REASON_PROSE: Record<ForecastUnavailableReason, string> = {
@@ -105,10 +106,27 @@ export default function WinProbabilityWithCI({
   forecastUnavailableReason = null,
   sourceDataCaveat = null,
   variant = "compact",
+  hideTeamNames = false,
 }: WinProbabilityWithCIProps) {
   const expanded = variant === "expanded";
 
   if (forecast === null) {
+    if (hideTeamNames) {
+      return (
+        <div
+          className="space-y-2"
+          role="region"
+          aria-label="Forecast unavailable"
+        >
+          <div className="flex items-center justify-center gap-2 py-1">
+            <span className="font-display text-lg text-silver-print">?</span>
+            <span className="font-body text-sm text-silver-print">vs</span>
+            <span className="font-display text-lg text-silver-print">?</span>
+          </div>
+          <ForecastUnavailable reason={forecastUnavailableReason} />
+        </div>
+      );
+    }
     return (
       <div
         className="space-y-2"
@@ -129,6 +147,39 @@ export default function WinProbabilityWithCI({
   }
 
   const awayProb = clamp(100 - forecast.home_win_probability, 0, 100);
+
+  if (hideTeamNames) {
+    return (
+      <div
+        className="space-y-2"
+        role="img"
+        aria-label={ariaLabel(homeTeamName, awayTeamName, forecast)}
+      >
+        <div className="flex items-baseline justify-between">
+          <span
+            className={`font-display font-bold text-white ${expanded ? "text-2xl" : "text-lg"}`}
+          >
+            {forecast.home_win_probability}%
+          </span>
+          <span
+            className={`font-display font-bold text-silver-print ${expanded ? "text-2xl" : "text-lg"}`}
+          >
+            {awayProb}%
+          </span>
+        </div>
+        <ForecastBar forecast={forecast} expanded={expanded} />
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <TierChip label={forecast.confidence_tier_label} />
+          {expanded && (
+            <span className="font-body text-xs text-silver-print">
+              {forecast.home_win_probability_ci_low}% — {forecast.home_win_probability_ci_high}%
+            </span>
+          )}
+        </div>
+        {sourceDataCaveat && <CaveatBlock caveat={sourceDataCaveat} />}
+      </div>
+    );
+  }
 
   return (
     <div
