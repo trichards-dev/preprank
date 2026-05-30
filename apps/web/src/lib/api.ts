@@ -20,9 +20,11 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 // NEW ENDPOINT (2026-05-30, Phase 3.4.2.fix): GET /api/v1/ratings/
 // latest-week → LatestWeek = {sport, season_year, latest_week,
 // total_rankings}. Shape mirrors apps/api/app/schemas/ratings.py
-// LatestWeekOut 1:1. Wired via fetchLatestWeek() below. The
-// rankings page refactor (remove FOOTBALL_WEEK_COUNT hardcode +
-// add empty-season UX) lands in the follow-up web commit.
+// LatestWeekOut 1:1. Wired via fetchLatestWeek() below; caller is
+// apps/web/src/app/rankings/[sport]/page.tsx (replaces the prior
+// FOOTBALL_WEEK_COUNT=11 hardcode that broke all 8 sports). 404
+// from this endpoint and a 200+latest_week=null both render the
+// shared empty-season UX in the rankings page.
 
 // --- Types ---
 
