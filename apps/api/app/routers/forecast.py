@@ -46,11 +46,18 @@ router = APIRouter()
 # --------------------------------------------------------------------
 # Reliability table loading
 # --------------------------------------------------------------------
-# Located relative to repo root. Override via PREPRANK_RELIABILITY_TABLE
-# env var for tests / staging.
+# Bundled into the API package at apps/api/app/data/reliability_table.json
+# so it ships with the Docker image regardless of container layout
+# (Dockerfile.api flattens apps/api/* → /app/* which broke the prior
+# repo-root walk via Path(__file__).parents[4]; see Phase 3.4.0.2 deploy
+# failures 2e7e3d6 / 878dd6f / 63888f0 / 3c5736c — all crashed on
+# IndexError: 4 during module import in container).
+#
+# Override via PREPRANK_RELIABILITY_TABLE env var for tests / staging
+# / hot-reloading newer calibration runs without redeploying.
 _DEFAULT_TABLE_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "data" / "calibration" / "phase6_reliability_table.json"
+    Path(__file__).resolve().parent.parent
+    / "data" / "reliability_table.json"
 )
 
 

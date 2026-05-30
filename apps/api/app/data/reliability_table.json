@@ -1,0 +1,784 @@
+{
+  "schema_version": 1,
+  "generated_utc": "2026-05-29T18:31:56.831554Z",
+  "calibration_run_id": "wf-phase6-calibration-kfold-tail-power-n139",
+  "run_timestamp": "2026-05-29T17:44:54.689086",
+  "train_seasons": [
+    2022,
+    2023,
+    2024
+  ],
+  "holdout_seasons": [
+    2025
+  ],
+  "sports": {
+    "Football": {
+      "isotonic_slope": 0.96815992057744,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 32,
+          "mean_predicted": 0.010477941176470587,
+          "mean_observed": 0.09375,
+          "gap": 0.08327205882352941
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 197,
+          "mean_predicted": 0.15149509600347064,
+          "mean_observed": 0.16243654822335024,
+          "gap": 0.010941452219879605
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 81,
+          "mean_predicted": 0.2319700728282552,
+          "mean_observed": 0.2222222222222222,
+          "gap": 0.009747850606033004
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 270,
+          "mean_predicted": 0.3275018237575178,
+          "mean_observed": 0.32592592592592595,
+          "gap": 0.0015758978315918437
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 28,
+          "mean_predicted": 0.4243100649350649,
+          "mean_observed": 0.35714285714285715,
+          "gap": 0.06716720779220775
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 251,
+          "mean_predicted": 0.5554051758049345,
+          "mean_observed": 0.5577689243027888,
+          "gap": 0.0023637484978542567
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 80,
+          "mean_predicted": 0.659921657101217,
+          "mean_observed": 0.75,
+          "gap": 0.09007834289878303
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 110,
+          "mean_predicted": 0.7448639222620416,
+          "mean_observed": 0.7,
+          "gap": 0.04486392226204161
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 165,
+          "mean_predicted": 0.8500481732471873,
+          "mean_observed": 0.8484848484848485,
+          "gap": 0.0015633247623387803
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 225,
+          "mean_predicted": 0.9478352179989201,
+          "mean_observed": 0.9288888888888889,
+          "gap": 0.018946329110031246
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.10228423444387873,
+        "beta_1": 0.14907667430780144,
+        "beta_2": 0.10228423444387873,
+        "beta_3": 0.0,
+        "beta_4": 0.0,
+        "beta_5": 0.07074485487846342,
+        "beta_6": 0.043023679540019046
+      }
+    },
+    "Volleyball": {
+      "isotonic_slope": 0.9773436226190275,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 533,
+          "mean_predicted": 0.05375439424681946,
+          "mean_observed": 0.06191369606003752,
+          "gap": 0.008159301813218063
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 222,
+          "mean_predicted": 0.16480353718205382,
+          "mean_observed": 0.18468468468468469,
+          "gap": 0.01988114750263087
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 157,
+          "mean_predicted": 0.2477539417883901,
+          "mean_observed": 0.2356687898089172,
+          "gap": 0.012085151979472908
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 275,
+          "mean_predicted": 0.3439114331169797,
+          "mean_observed": 0.3781818181818182,
+          "gap": 0.03427038506483848
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 267,
+          "mean_predicted": 0.44737001014585315,
+          "mean_observed": 0.4344569288389513,
+          "gap": 0.01291308130690183
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 471,
+          "mean_predicted": 0.5395397325121757,
+          "mean_observed": 0.5265392781316348,
+          "gap": 0.013000454380540871
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 301,
+          "mean_predicted": 0.6604079609541735,
+          "mean_observed": 0.6744186046511628,
+          "gap": 0.014010643696989233
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 243,
+          "mean_predicted": 0.7456895667478741,
+          "mean_observed": 0.7119341563786008,
+          "gap": 0.03375541036927332
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 430,
+          "mean_predicted": 0.836490019099996,
+          "mean_observed": 0.8395348837209302,
+          "gap": 0.003044864620934229
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 591,
+          "mean_predicted": 0.9582040247447788,
+          "mean_observed": 0.9509306260575296,
+          "gap": 0.0072733986872491885
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.04839595968928333,
+        "beta_1": 0.10766715537674282,
+        "beta_2": 0.04839595968928333,
+        "beta_3": 0.0,
+        "beta_4": 1.1210267132625753,
+        "beta_5": 0.23117295980096536,
+        "beta_6": 0.1532407345185925
+      }
+    },
+    "Boys Basketball": {
+      "isotonic_slope": 0.9774136129485986,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 108,
+          "mean_predicted": 0.049151137032612,
+          "mean_observed": 0.09259259259259259,
+          "gap": 0.04344145555998059
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 431,
+          "mean_predicted": 0.1418510142552145,
+          "mean_observed": 0.1345707656612529,
+          "gap": 0.007280248593961619
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 319,
+          "mean_predicted": 0.23227349092368613,
+          "mean_observed": 0.25391849529780564,
+          "gap": 0.02164500437411951
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 688,
+          "mean_predicted": 0.3448380132067629,
+          "mean_observed": 0.34156976744186046,
+          "gap": 0.003268245764902422
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 132,
+          "mean_predicted": 0.460661605998943,
+          "mean_observed": 0.5378787878787878,
+          "gap": 0.07721718187984483
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 734,
+          "mean_predicted": 0.5441167184874528,
+          "mean_observed": 0.5272479564032697,
+          "gap": 0.016868762084183087
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 15,
+          "mean_predicted": 0.6185185185185184,
+          "mean_observed": 0.4,
+          "gap": 0.21851851851851833
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 850,
+          "mean_predicted": 0.727350790287871,
+          "mean_observed": 0.7282352941176471,
+          "gap": 0.0008845038297761176
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 596,
+          "mean_predicted": 0.8556932378214709,
+          "mean_observed": 0.860738255033557,
+          "gap": 0.005045017212086167
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 54,
+          "mean_predicted": 0.9247049411162316,
+          "mean_observed": 0.8333333333333334,
+          "gap": 0.09137160778289821
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.021793176893651855,
+        "beta_1": 0.07778793929438452,
+        "beta_2": 0.021793176893651855,
+        "beta_3": 0.0,
+        "beta_4": 0.08659528741695534,
+        "beta_5": 0.20701276683326142,
+        "beta_6": 0.051891016030077175
+      }
+    },
+    "Girls Basketball": {
+      "isotonic_slope": 0.9815799075698999,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 469,
+          "mean_predicted": 0.03230135852388438,
+          "mean_observed": 0.04051172707889126,
+          "gap": 0.008210368555006876
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 331,
+          "mean_predicted": 0.14056347005105368,
+          "mean_observed": 0.14501510574018128,
+          "gap": 0.004451635689127598
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 306,
+          "mean_predicted": 0.267566799883651,
+          "mean_observed": 0.3104575163398693,
+          "gap": 0.04289071645621828
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 411,
+          "mean_predicted": 0.3409311073226033,
+          "mean_observed": 0.3381995133819951,
+          "gap": 0.002731593940608179
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 239,
+          "mean_predicted": 0.4697588735691615,
+          "mean_observed": 0.4309623430962343,
+          "gap": 0.03879653047292719
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 320,
+          "mean_predicted": 0.5479796047779788,
+          "mean_observed": 0.565625,
+          "gap": 0.017645395222021243
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 184,
+          "mean_predicted": 0.6264998127052877,
+          "mean_observed": 0.5869565217391305,
+          "gap": 0.03954329096615716
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 356,
+          "mean_predicted": 0.7460423229566682,
+          "mean_observed": 0.7359550561797753,
+          "gap": 0.010087266776892867
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 438,
+          "mean_predicted": 0.8402639408411064,
+          "mean_observed": 0.8447488584474886,
+          "gap": 0.004484917606382144
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 625,
+          "mean_predicted": 0.9621872751297337,
+          "mean_observed": 0.952,
+          "gap": 0.01018727512973372
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.026690560508191814,
+        "beta_1": 0.08115429060834271,
+        "beta_2": 0.026690560508191814,
+        "beta_3": 0.0,
+        "beta_4": 0.0989034760096309,
+        "beta_5": 0.22688367134975027,
+        "beta_6": 0.03449214241898977
+      }
+    },
+    "Baseball": {
+      "isotonic_slope": 0.9665533055769727,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 93,
+          "mean_predicted": 0.04649374544378512,
+          "mean_observed": 0.06451612903225806,
+          "gap": 0.01802238358847294
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 104,
+          "mean_predicted": 0.146556382053844,
+          "mean_observed": 0.14423076923076922,
+          "gap": 0.0023256128230747797
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 20,
+          "mean_predicted": 0.250995670995671,
+          "mean_observed": 0.4,
+          "gap": 0.14900432900432903
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 390,
+          "mean_predicted": 0.3311167618014772,
+          "mean_observed": 0.3564102564102564,
+          "gap": 0.02529349460877922
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 402,
+          "mean_predicted": 0.4625748607141124,
+          "mean_observed": 0.4601990049751244,
+          "gap": 0.0023758557389880197
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 241,
+          "mean_predicted": 0.5405018993895137,
+          "mean_observed": 0.5311203319502075,
+          "gap": 0.009381567439306182
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 305,
+          "mean_predicted": 0.6551764755932176,
+          "mean_observed": 0.6557377049180327,
+          "gap": 0.0005612293248151712
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 746,
+          "mean_predicted": 0.7551314255438354,
+          "mean_observed": 0.7506702412868632,
+          "gap": 0.004461184256972173
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 48,
+          "mean_predicted": 0.8042553191489362,
+          "mean_observed": 0.6875,
+          "gap": 0.11675531914893622
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 418,
+          "mean_predicted": 0.9593739082998652,
+          "mean_observed": 0.9545454545454546,
+          "gap": 0.004828453754410655
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.1608586889529653,
+        "beta_1": 0.09964426242470416,
+        "beta_2": 0.1608586889529653,
+        "beta_3": 0.0,
+        "beta_4": 0.2279134141019098,
+        "beta_5": 0.08765443670518787,
+        "beta_6": 0.06610497269698885
+      }
+    },
+    "Softball": {
+      "isotonic_slope": 0.9780677874477138,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 326,
+          "mean_predicted": 0.061059970631276446,
+          "mean_observed": 0.07668711656441718,
+          "gap": 0.015627145933140733
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 96,
+          "mean_predicted": 0.13040771985608116,
+          "mean_observed": 0.09375,
+          "gap": 0.036657719856081156
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 440,
+          "mean_predicted": 0.2473406396227976,
+          "mean_observed": 0.25,
+          "gap": 0.0026593603772024077
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 279,
+          "mean_predicted": 0.3562994595247496,
+          "mean_observed": 0.3727598566308244,
+          "gap": 0.016460397106074776
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 184,
+          "mean_predicted": 0.43995380379656995,
+          "mean_observed": 0.45652173913043476,
+          "gap": 0.016567935333864803
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 116,
+          "mean_predicted": 0.5467289376335095,
+          "mean_observed": 0.4827586206896552,
+          "gap": 0.0639703169438543
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 418,
+          "mean_predicted": 0.6503996866424809,
+          "mean_observed": 0.6555023923444976,
+          "gap": 0.005102705702016652
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 249,
+          "mean_predicted": 0.7689747798306737,
+          "mean_observed": 0.7871485943775101,
+          "gap": 0.01817381454683631
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 334,
+          "mean_predicted": 0.8579820945421301,
+          "mean_observed": 0.8263473053892215,
+          "gap": 0.03163478915290863
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 508,
+          "mean_predicted": 0.9640541189792918,
+          "mean_observed": 0.9625984251968503,
+          "gap": 0.0014556937824414806
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.046146536696534735,
+        "beta_1": 0.0573662020849794,
+        "beta_2": 0.046146536696534735,
+        "beta_3": 0.0,
+        "beta_4": 0.22687412559465464,
+        "beta_5": 0.31303811836243095,
+        "beta_6": 0.03524113155902703
+      }
+    },
+    "Boys Soccer": {
+      "isotonic_slope": 0.9707432797095982,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 172,
+          "mean_predicted": 0.0418184908758535,
+          "mean_observed": 0.06976744186046512,
+          "gap": 0.027948950984611615
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 125,
+          "mean_predicted": 0.13027231848992357,
+          "mean_observed": 0.112,
+          "gap": 0.01827231848992357
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 55,
+          "mean_predicted": 0.2425549440117109,
+          "mean_observed": 0.2727272727272727,
+          "gap": 0.030172328715561803
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 126,
+          "mean_predicted": 0.34852432962626206,
+          "mean_observed": 0.3253968253968254,
+          "gap": 0.023127504229436657
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 130,
+          "mean_predicted": 0.4551871834842018,
+          "mean_observed": 0.45384615384615384,
+          "gap": 0.0013410296380479414
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 88,
+          "mean_predicted": 0.5637009349194223,
+          "mean_observed": 0.6704545454545454,
+          "gap": 0.10675361053512311
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 100,
+          "mean_predicted": 0.6395625287173262,
+          "mean_observed": 0.55,
+          "gap": 0.08956252871732617
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 80,
+          "mean_predicted": 0.750103875232529,
+          "mean_observed": 0.85,
+          "gap": 0.099896124767471
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 114,
+          "mean_predicted": 0.8307359603260253,
+          "mean_observed": 0.7543859649122807,
+          "gap": 0.07634999541374454
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 361,
+          "mean_predicted": 0.9487674750706877,
+          "mean_observed": 0.9418282548476454,
+          "gap": 0.006939220223042275
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.05902133487594161,
+        "beta_1": 0.0707438464592643,
+        "beta_2": 0.05902133487594161,
+        "beta_3": 0.0,
+        "beta_4": 0.7227597072196713,
+        "beta_5": 0.3515608263228461,
+        "beta_6": 0.05634020238077086
+      }
+    },
+    "Girls Soccer": {
+      "isotonic_slope": 0.9754545522266767,
+      "isotonic_slope_in_band": true,
+      "deciles": [
+        {
+          "bin_lower": 0.0,
+          "bin_upper": 0.1,
+          "n_games": 359,
+          "mean_predicted": 0.04631258171699619,
+          "mean_observed": 0.052924791086350974,
+          "gap": 0.006612209369354784
+        },
+        {
+          "bin_lower": 0.1,
+          "bin_upper": 0.2,
+          "n_games": 18,
+          "mean_predicted": 0.14268755935422603,
+          "mean_observed": 0.16666666666666666,
+          "gap": 0.02397910731244063
+        },
+        {
+          "bin_lower": 0.2,
+          "bin_upper": 0.30000000000000004,
+          "n_games": 118,
+          "mean_predicted": 0.2809149899759431,
+          "mean_observed": 0.2966101694915254,
+          "gap": 0.015695179515582303
+        },
+        {
+          "bin_lower": 0.30000000000000004,
+          "bin_upper": 0.4,
+          "n_games": 34,
+          "mean_predicted": 0.30744214910553386,
+          "mean_observed": 0.20588235294117646,
+          "gap": 0.1015597961643574
+        },
+        {
+          "bin_lower": 0.4,
+          "bin_upper": 0.5,
+          "n_games": 109,
+          "mean_predicted": 0.43335026212319794,
+          "mean_observed": 0.5504587155963303,
+          "gap": 0.11710845347313237
+        },
+        {
+          "bin_lower": 0.5,
+          "bin_upper": 0.6000000000000001,
+          "n_games": 84,
+          "mean_predicted": 0.5489759162102524,
+          "mean_observed": 0.40476190476190477,
+          "gap": 0.14421401144834767
+        },
+        {
+          "bin_lower": 0.6000000000000001,
+          "bin_upper": 0.7000000000000001,
+          "n_games": 15,
+          "mean_predicted": 0.6329004329004329,
+          "mean_observed": 0.8,
+          "gap": 0.1670995670995672
+        },
+        {
+          "bin_lower": 0.7000000000000001,
+          "bin_upper": 0.8,
+          "n_games": 138,
+          "mean_predicted": 0.777510886274609,
+          "mean_observed": 0.8043478260869565,
+          "gap": 0.026836939812347582
+        },
+        {
+          "bin_lower": 0.8,
+          "bin_upper": 0.9,
+          "n_games": 106,
+          "mean_predicted": 0.857002481048321,
+          "mean_observed": 0.8018867924528302,
+          "gap": 0.055115688595490764
+        },
+        {
+          "bin_lower": 0.9,
+          "bin_upper": 1.0,
+          "n_games": 383,
+          "mean_predicted": 0.9787620655130008,
+          "mean_observed": 0.9738903394255874,
+          "gap": 0.004871726087413375
+        }
+      ],
+      "tail_miscalibration_after_isotonic": false,
+      "model_coefficients": {
+        "beta_0": 0.05617089349795977,
+        "beta_1": 0.03577282949247031,
+        "beta_2": 0.05617089349795977,
+        "beta_3": 0.0,
+        "beta_4": 0.7365653723822283,
+        "beta_5": 0.36114218902925044,
+        "beta_6": 0.030028900367495344
+      }
+    }
+  }
+}
