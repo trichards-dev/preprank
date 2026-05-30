@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { fetchGame, fetchGameImpact, Game, GameImpact } from "@/lib/api";
+import {
+  fetchGame,
+  fetchGameImpact,
+  fetchGameForecast,
+  Game,
+  GameImpact,
+  GameForecast,
+} from "@/lib/api";
 import ShareButton from "@/components/ShareButton";
+import WinProbabilityWithCI from "@/components/WinProbabilityWithCI";
 
 export default function GameDetailPage() {
   const params = useParams();
@@ -12,6 +20,7 @@ export default function GameDetailPage() {
 
   const [game, setGame] = useState<Game | null>(null);
   const [impacts, setImpacts] = useState<GameImpact[]>([]);
+  const [forecast, setForecast] = useState<GameForecast | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,10 +30,12 @@ export default function GameDetailPage() {
     Promise.all([
       fetchGame(gameId),
       fetchGameImpact(gameId),
+      fetchGameForecast(gameId).catch(() => null),
     ])
-      .then(([g, i]) => {
+      .then(([g, i, f]) => {
         setGame(g);
         setImpacts(i);
+        setForecast(f);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -90,6 +101,28 @@ export default function GameDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Win Probability (Phase 3.3.2) */}
+      {!isFinal && forecast && (
+        <section className="mb-8">
+          <h2
+            className="text-xl font-bold mb-4"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            WIN PROBABILITY
+          </h2>
+          <div className="rounded-lg border border-steel-gray/30 bg-charcoal-elevated p-6">
+            <WinProbabilityWithCI
+              homeTeamName={game.home_team_name || `Team #${game.home_team_id}`}
+              awayTeamName={game.away_team_name || `Team #${game.away_team_id}`}
+              forecast={forecast.forecast}
+              forecastUnavailableReason={forecast.forecast_unavailable_reason}
+              sourceDataCaveat={forecast.source_data_caveat}
+              variant="expanded"
+            />
+          </div>
+        </section>
+      )}
 
       {/* Impact Analysis */}
       {impacts.length > 0 && (
