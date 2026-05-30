@@ -1,5 +1,11 @@
 import Link from "next/link";
-import type { PremiumDetail } from "@/lib/api";
+import type { FactorImpact, PremiumDetail } from "@/lib/api";
+
+// Phase 3.3.4b (2026-05-30): raw beta coefficients + numeric per-decile
+// reliability are NO LONGER displayed at any tier. Premium drawer surfaces
+// qualitative factor impact + descriptive reliability + typical-decile +
+// methodology deep-link only. See claude-memory decisions.md 2026-05-30
+// entry "Phase 3.3.4b — coefficient exposure removed".
 
 interface ModelDetailsExpandProps {
   premiumDetail: PremiumDetail;
@@ -8,15 +14,26 @@ interface ModelDetailsExpandProps {
   labelledById: string;
 }
 
+const IMPACT_LABEL: Record<FactorImpact, string> = {
+  high: "High impact",
+  moderate: "Moderate impact",
+  low: "Low impact",
+};
+
+const IMPACT_CLASSES: Record<FactorImpact, string> = {
+  high: "bg-crimson/20 text-white",
+  moderate: "bg-steel-gray/20 text-silver-print",
+  low: "bg-steel-gray/10 text-silver-print",
+};
+
 export default function ModelDetailsExpand({
   premiumDetail,
   sport,
   panelId,
   labelledById,
 }: ModelDetailsExpandProps) {
-  const reliability = premiumDetail.predicted_decile_reliability;
-  const coefs = Object.entries(premiumDetail.model_coefficients);
   const displayDecile = premiumDetail.predicted_decile + 1;
+  const factors = premiumDetail.factor_contributions;
 
   return (
     <div
@@ -27,21 +44,31 @@ export default function ModelDetailsExpand({
     >
       <div>
         <div className="font-display text-[0.65rem] uppercase tracking-wide text-silver-print mb-1">
-          Model coefficients · {sport}
+          What&apos;s driving this prediction · {sport}
         </div>
-        <table className="w-full text-xs">
-          <tbody>
-            {coefs.map(([k, v]) => (
-              <tr key={k} className="border-b border-steel-gray/15">
-                <td className="py-1 text-silver-print truncate pr-2">{k}</td>
-                <td className="py-1 text-right text-white font-mono whitespace-nowrap">
-                  {v > 0 ? "+" : ""}
-                  {v.toFixed(3)}
-                </td>
-              </tr>
+        {factors.length === 0 ? (
+          <div className="text-xs text-silver-print">
+            Factor data unavailable for this prediction.
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {factors.map((fc) => (
+              <li
+                key={fc.label}
+                className="flex items-center justify-between gap-2 border-b border-steel-gray/15 py-1"
+              >
+                <span className="text-xs text-white truncate pr-2">
+                  {fc.label}
+                </span>
+                <span
+                  className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide whitespace-nowrap ${IMPACT_CLASSES[fc.impact]}`}
+                >
+                  {IMPACT_LABEL[fc.impact]}
+                </span>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -69,37 +96,16 @@ export default function ModelDetailsExpand({
 
       <div className="rounded border border-steel-gray/20 p-2 text-xs">
         <div className="font-display uppercase tracking-wide text-silver-print text-[0.65rem]">
-          Predicted decile · D{displayDecile} reliability
+          Predicted decile · D{displayDecile}
         </div>
-        {reliability ? (
-          <div className="mt-1 grid grid-cols-4 gap-1 text-silver-print">
-            <div>
-              <div className="text-[0.6rem] uppercase">n</div>
-              <div className="text-white font-mono">{reliability.n_games}</div>
-            </div>
-            <div>
-              <div className="text-[0.6rem] uppercase">gap</div>
-              <div className="text-white font-mono">{reliability.gap.toFixed(3)}</div>
-            </div>
-            <div>
-              <div className="text-[0.6rem] uppercase">pred</div>
-              <div className="text-white font-mono">
-                {reliability.mean_predicted !== null
-                  ? reliability.mean_predicted.toFixed(3)
-                  : "—"}
-              </div>
-            </div>
-            <div>
-              <div className="text-[0.6rem] uppercase">obs</div>
-              <div className="text-white font-mono">
-                {reliability.mean_observed !== null
-                  ? reliability.mean_observed.toFixed(3)
-                  : "—"}
-              </div>
-            </div>
+        {premiumDetail.predicted_decile_reliability ? (
+          <div className="mt-1 text-silver-print">
+            {premiumDetail.predicted_decile_reliability.description}
           </div>
         ) : (
-          <div className="mt-1 text-silver-print">Reliability data unavailable</div>
+          <div className="mt-1 text-silver-print">
+            Reliability data unavailable for this decile.
+          </div>
         )}
       </div>
 

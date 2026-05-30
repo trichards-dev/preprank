@@ -1,8 +1,62 @@
-# GameCard + Model Details expand — Phase 3.3.4 audit
+# GameCard + Model Details expand — Phase 3.3.4 audit (REVISED → 3.3.4b)
 
 **Captured:** 2026-05-30
-**Approved by:** Reese Richards (Option 2 selected after 4-section preview comparison)
-**Verdict:** Clean integration. Premium-conditional expand with single-expand-only behavior.
+**Approved by:** Reese Richards (Option 2 selected after 4-section preview comparison; revised same day to remove coefficient exposure)
+**Verdict:** Clean integration. Premium-conditional expand with single-expand-only behavior. Phase 3.3.4b (later same day) removed raw coefficient exposure entirely.
+
+## Pre-commit revision (3.3.4b · 2026-05-30 same day)
+
+Thomas raised: paywalling raw β coefficients doesn't protect IP — a
+competitor pays once, scrapes β values, reverse-engineers the model.
+**Real protection requires not exposing coefficients at any tier.**
+
+**API exposure status at time of revision:** ZERO. The deployed Vercel
+web app calls `api.preprank.com` which does not resolve (HTTP 000 / DNS
+fails). No premium user has ever seen the original 3.3.4 payload in
+production. Revision lands cleanly with no rollback urgency.
+
+**What 3.3.4 originally shipped (preserved as `composite_pre_3_3_4b.png`):**
+- `PremiumDetail.model_coefficients`: raw β₀–β₆ floats
+- `PredictedDecileReliability`: n_games, gap, mean_predicted, mean_observed numerics
+
+**What 3.3.4b replaces it with (rendered in `composite_v2_factor_impact.png`):**
+- `PremiumDetail.factor_contributions`: qualitative impact buckets ("Opponent strength · HIGH IMPACT", etc.) — derived server-side from coefficient magnitudes, raw values never leave the engine
+- `PredictedDecileReliability.description`: prose statement ("Predictions in this range typically match observed outcomes within our confidence band.") — no n/gap/predicted/observed numerics
+
+**Six factor labels (engine-side beta semantic map; raw beta names + magnitudes never exit):**
+| Internal | Public label |
+|---|---|
+| beta_0 | (intercept — not exposed as a "factor"; baseline only) |
+| beta_1 | Opponent strength |
+| beta_2 | Home advantage |
+| beta_3 | Scoring margin |
+| beta_4 | Offensive/defensive balance |
+| beta_5 | Early-season carryover |
+| beta_6 | Recent form |
+
+**Impact bucket derivation (server-side `_impact_buckets()` in `packages/engine/src/engine/calibration/forecast.py`):**
+- Filter to nonzero coefficients
+- Sort descending by |magnitude|
+- Rank-percentile within sport: top 25% → "high"; bottom 25% → "low"; middle → "moderate"
+- Return only the qualitative bucket
+
+**Test guard (`apps/api/tests/test_forecast_endpoint.py`):**
+```python
+assert "model_coefficients" not in PremiumDetail.model_fields
+```
+
+**Pattern #8 extension (`b1_2b_2c_arc_patterns.md`):** "Paywall doesn't protect IP. If exposing data would enable reverse engineering, the data must not be exposed at any tier."
+
+## Original Phase 3.3.4 ship (pre-3.3.4b)
+
+The discussion below documents the original ship that was revised before
+launch. The original 4-option preview composite at
+`docs/audits/modeldetails_options_preview_2026-05-30/composite_full.png`
+also still uses the original schema in its sample data; updated 3.3.4b
+in this turn to use factor-impact labels (preserving the comparison's
+visual shape).
+
+---
 
 ## Decision context
 

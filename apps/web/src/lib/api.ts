@@ -89,15 +89,23 @@ export interface SourceDataCaveat {
   prose: string;
 }
 
+// Phase 3.3.4b: raw beta coefficients + numeric reliability NEVER exit the
+// server. Premium drawer renders qualitative factor impact + descriptive
+// reliability prose only.
+
+export type FactorImpact = "high" | "moderate" | "low";
+
+export interface FactorContribution {
+  label: string;
+  impact: FactorImpact;
+}
+
 export interface PredictedDecileReliability {
-  n_games: number;
-  gap: number;
-  mean_predicted: number | null;
-  mean_observed: number | null;
+  description: string;
 }
 
 export interface PremiumDetail {
-  model_coefficients: Record<string, number>;
+  factor_contributions: FactorContribution[];
   home_typical_decile: number | null;
   away_typical_decile: number | null;
   predicted_decile: number;

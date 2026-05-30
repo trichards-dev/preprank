@@ -28,36 +28,28 @@ const SAMPLE_FORECAST: ForecastBlock = {
 };
 
 interface PremiumDetailSample {
-  model_coefficients: Record<string, number>;
+  factor_contributions: Array<{ label: string; impact: "high" | "moderate" | "low" }>;
   home_typical_decile: number;
   away_typical_decile: number;
   predicted_decile: number;          // 0-indexed
-  predicted_decile_reliability: {
-    n_games: number;
-    gap: number;
-    mean_predicted: number;
-    mean_observed: number;
-  };
+  predicted_decile_reliability: { description: string };
   methodology_deep_link: string;
   sport: string;
 }
 
 const SAMPLE_PREMIUM: PremiumDetailSample = {
-  model_coefficients: {
-    "β₁ rating diff": 0.149,
-    "β₂ home advantage": 0.102,
-    "β₃ recent form": 0.087,
-    "β₄ schedule strength": 0.034,
-    "β₅ prior-year carryover": 0.021,
-  },
+  factor_contributions: [
+    { label: "Opponent strength", impact: "high" },
+    { label: "Home advantage", impact: "high" },
+    { label: "Recent form", impact: "moderate" },
+    { label: "Offensive/defensive balance", impact: "moderate" },
+    { label: "Early-season carryover", impact: "low" },
+  ],
   home_typical_decile: 7,
   away_typical_decile: 6,
   predicted_decile: 5,
   predicted_decile_reliability: {
-    n_games: 247,
-    gap: 0.018,
-    mean_predicted: 0.582,
-    mean_observed: 0.564,
+    description: "Predictions in this range typically match observed outcomes within our confidence band.",
   },
   methodology_deep_link: "/methodology#football-d6",
   sport: "Football",
@@ -68,24 +60,33 @@ const SAMPLE_PREMIUM: PremiumDetailSample = {
 // This local component intentionally lives ONLY in the preview route. It is NOT
 // committed to /components/ until Thomas signs off on a surface direction.
 
+const IMPACT_CLASSES_PREVIEW: Record<"high" | "moderate" | "low", string> = {
+  high: "bg-crimson/20 text-white",
+  moderate: "bg-steel-gray/20 text-silver-print",
+  low: "bg-steel-gray/10 text-silver-print",
+};
+
 function ModelDetailsBlock({ data }: { data: PremiumDetailSample }) {
   const reliability = data.predicted_decile_reliability;
   return (
     <div className="space-y-4 font-body">
       <div>
         <div className="font-display text-xs uppercase tracking-wide text-silver-print mb-1">
-          Model coefficients · {data.sport}
+          What&apos;s driving this prediction · {data.sport}
         </div>
-        <table className="w-full text-xs">
-          <tbody>
-            {Object.entries(data.model_coefficients).map(([k, v]) => (
-              <tr key={k} className="border-b border-steel-gray/15">
-                <td className="py-1 text-silver-print">{k}</td>
-                <td className="py-1 text-right text-white font-mono">{v > 0 ? "+" : ""}{v.toFixed(3)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul className="space-y-1">
+          {data.factor_contributions.map((fc) => (
+            <li
+              key={fc.label}
+              className="flex items-center justify-between gap-2 border-b border-steel-gray/15 py-1"
+            >
+              <span className="text-xs text-white">{fc.label}</span>
+              <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide whitespace-nowrap ${IMPACT_CLASSES_PREVIEW[fc.impact]}`}>
+                {fc.impact} impact
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-xs">
@@ -101,26 +102,9 @@ function ModelDetailsBlock({ data }: { data: PremiumDetailSample }) {
 
       <div className="rounded border border-steel-gray/20 p-2 text-xs">
         <div className="font-display uppercase tracking-wide text-silver-print">
-          Predicted decile · D{data.predicted_decile + 1} reliability
+          Predicted decile · D{data.predicted_decile + 1}
         </div>
-        <div className="mt-1 grid grid-cols-4 gap-2 text-silver-print">
-          <div>
-            <div className="text-[0.65rem] uppercase">n</div>
-            <div className="text-white font-mono">{reliability.n_games}</div>
-          </div>
-          <div>
-            <div className="text-[0.65rem] uppercase">gap</div>
-            <div className="text-white font-mono">{reliability.gap.toFixed(3)}</div>
-          </div>
-          <div>
-            <div className="text-[0.65rem] uppercase">predicted</div>
-            <div className="text-white font-mono">{reliability.mean_predicted.toFixed(3)}</div>
-          </div>
-          <div>
-            <div className="text-[0.65rem] uppercase">observed</div>
-            <div className="text-white font-mono">{reliability.mean_observed.toFixed(3)}</div>
-          </div>
-        </div>
+        <div className="mt-1 text-silver-print">{reliability.description}</div>
       </div>
 
       <Link

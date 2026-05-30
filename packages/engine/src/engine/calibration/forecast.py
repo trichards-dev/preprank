@@ -190,6 +190,72 @@ def compute_forecast(
     )
 
 
+# Public-facing semantic labels for model features. Beta indices map to
+# qualitative descriptors here; raw beta names and numeric magnitudes never
+# leave the engine. Phase 3.3.4b (2026-05-30) — paywalling coefficients
+# doesn't protect IP; only descriptive labels + qualitative buckets exit.
+_FACTOR_LABELS: list[tuple[str, str]] = [
+    ("beta_1", "Opponent strength"),
+    ("beta_2", "Home advantage"),
+    ("beta_3", "Scoring margin"),
+    ("beta_4", "Offensive/defensive balance"),
+    ("beta_5", "Early-season carryover"),
+    ("beta_6", "Recent form"),
+]
+
+
+def _impact_buckets(coefs: dict[str, float]) -> list[dict[str, str]]:
+    """Map nonzero per-feature coefficients to qualitative impact buckets.
+
+    Returns list of {"label": str, "impact": "high"|"moderate"|"low"} in
+    descending magnitude order. Skips beta_0 (intercept) and any
+    coefficient pinned to zero per spec (e.g., beta_3 in some sports).
+
+    Bucketing: rank-percentile across nonzero factors within this sport.
+    Top 25% → "high"; bottom 25% → "low"; middle → "moderate". Edge cases
+    (1-2 nonzero factors) collapse to "high" / "high"+"low".
+
+    Raw magnitudes never leave this function; only the qualitative bucket
+    is returned to callers.
+    """
+    nonzero: list[tuple[str, float]] = []
+    for key, label in _FACTOR_LABELS:
+        v = coefs.get(key, 0.0)
+        if v is None:
+            continue
+        if abs(float(v)) > 1e-9:
+            nonzero.append((label, abs(float(v))))
+    if not nonzero:
+        return []
+    nonzero.sort(key=lambda x: -x[1])
+    n = len(nonzero)
+    out: list[dict[str, str]] = []
+    for i, (label, _mag) in enumerate(nonzero):
+        rank_pct = (i / (n - 1)) if n > 1 else 0.0
+        if rank_pct <= 0.25:
+            bucket = "high"
+        elif rank_pct >= 0.75:
+            bucket = "low"
+        else:
+            bucket = "moderate"
+        out.append({"label": label, "impact": bucket})
+    return out
+
+
+def _reliability_description(gap: float) -> str:
+    """Map a per-decile calibration gap to a descriptive sentence.
+
+    Public-facing prose only — no n_games / gap values / mean_predicted /
+    mean_observed numerics. Phase 3.3.4b (2026-05-30).
+    """
+    a = abs(gap)
+    if a < 0.05:
+        return "Predictions in this range typically match observed outcomes within our confidence band."
+    if a < 0.15:
+        return "Predictions in this range show some variance from observed outcomes; the confidence band reflects this."
+    return "Predictions in this range carry meaningful uncertainty; the confidence band is wider as a result."
+
+
 def build_premium_detail(
     sport_name: str,
     home_team_id: int,
@@ -201,11 +267,16 @@ def build_premium_detail(
 ) -> dict[str, Any]:
     """Build the premium_detail block for authenticated premium responses.
 
-    Per Spec 5: coefficients + typical-decile per team + predicted-bucket
-    reliability + methodology deep-link.
+    Phase 3.3.4b revision (2026-05-30): raw beta coefficients and numeric
+    decile reliability are NOT exposed via API. Premium drawer renders:
+      - factor_contributions: qualitative impact buckets per feature
+      - predicted_decile + descriptive reliability statement
+      - typical-decile per team (coarse, non-revealing)
+      - methodology deep-link
 
-    The typical-decile fields are passed in (computed elsewhere from
-    per-team aggregates); this function just packages everything.
+    See claude-memory/apps/preprank/decisions.md 2026-05-30 entry "Phase
+    3.3.4b — coefficient exposure removed" + b1_2b_2c_arc_patterns.md
+    pattern #8 extension ("paywall doesn't protect IP").
     """
     sport_table = reliability_table.get("sports", {}).get(sport_name, {})
     coefs = sport_table.get("model_coefficients", {})
@@ -214,19 +285,14 @@ def build_premium_detail(
     deciles = sport_table.get("deciles", [])
     if 0 <= predicted_decile < len(deciles):
         d = deciles[predicted_decile]
-        decile_reliability = {
-            "n_games": int(d.get("n_games", 0)),
-            "gap": float(d.get("gap", 0.0)),
-            "mean_predicted": d.get("mean_predicted"),
-            "mean_observed": d.get("mean_observed"),
-        }
+        gap = float(d.get("gap", 0.0))
+        decile_reliability = {"description": _reliability_description(gap)}
 
-    # Methodology deep-link: /methodology#<sport-slug>-d<decile+1>
     sport_slug = sport_name.lower().replace(" ", "-")
     methodology_link = f"/methodology#{sport_slug}-d{predicted_decile + 1}"
 
     return {
-        "model_coefficients": dict(coefs),
+        "factor_contributions": _impact_buckets(coefs),
         "home_typical_decile": home_typical_decile,
         "away_typical_decile": away_typical_decile,
         "predicted_decile": predicted_decile,

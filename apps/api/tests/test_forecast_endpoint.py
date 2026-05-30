@@ -88,11 +88,13 @@ def test_drift_forecast_block_has_required_fields():
 def test_drift_premium_detail_has_required_fields():
     fields = PremiumDetail.model_fields
     for required in (
-        "model_coefficients", "home_typical_decile", "away_typical_decile",
+        "factor_contributions", "home_typical_decile", "away_typical_decile",
         "predicted_decile", "predicted_decile_reliability",
         "methodology_deep_link",
     ):
         assert required in fields
+    # Phase 3.3.4b: raw model_coefficients MUST NOT leak through schema
+    assert "model_coefficients" not in fields
 
 
 # ---------------------------------------------------------------------------

@@ -55,17 +55,33 @@ class SourceDataCaveat(BaseModel):
     prose: str
 
 
+class FactorContribution(BaseModel):
+    """Qualitative impact label for a model feature (Phase 3.3.4b)."""
+    label: str
+    impact: Literal["high", "moderate", "low"]
+
+
 class PredictedDecileReliability(BaseModel):
-    """Per-decile reliability stat surfaced in premium drawer."""
-    n_games: int
-    gap: float
-    mean_predicted: float | None
-    mean_observed: float | None
+    """Descriptive per-decile reliability statement (Phase 3.3.4b).
+
+    Raw numeric reliability metrics (n_games, gap, mean_predicted,
+    mean_observed) are no longer exposed via the API. Only a
+    descriptive prose statement leaves the server.
+    """
+    description: str
 
 
 class PremiumDetail(BaseModel):
-    """Premium-auth-conditional fields per Spec 5."""
-    model_coefficients: dict[str, float]
+    """Premium-auth-conditional fields (Phase 3.3.4b revision).
+
+    Beta coefficients and numeric reliability data are NOT included.
+    Premium drawer shows qualitative factor impact + descriptive
+    reliability + typical-decile + methodology deep-link.
+
+    See `decisions.md` 2026-05-30 entry "Phase 3.3.4b — coefficient
+    exposure removed".
+    """
+    factor_contributions: list[FactorContribution]
     home_typical_decile: int | None
     away_typical_decile: int | None
     predicted_decile: int

@@ -84,6 +84,16 @@ export default function Navbar() {
           >
             Scenario Builder
           </Link>
+          <Link
+            href="/methodology"
+            className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+              pathname?.startsWith("/methodology")
+                ? "bg-crimson text-white"
+                : "text-steel-gray hover:text-white"
+            }`}
+          >
+            Methodology
+          </Link>
           <div className="ml-4 flex items-center gap-2">
             {user ? (
               <>
@@ -183,6 +193,13 @@ export default function Navbar() {
             onClick={() => setMobileOpen(false)}
           >
             Scenario Builder
+          </Link>
+          <Link
+            href="/methodology"
+            className="block rounded px-3 py-2 text-sm text-steel-gray hover:text-white hover:bg-crimson/10"
+            onClick={() => setMobileOpen(false)}
+          >
+            Methodology
           </Link>
           <div className="border-t border-steel-gray/30 mt-2 pt-2">
             {user ? (

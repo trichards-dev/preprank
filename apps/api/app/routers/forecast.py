@@ -24,6 +24,7 @@ from app.auth.premium import _is_premium
 from app.database import get_db
 from app.models import Game, Sport, Team, User
 from app.schemas.forecast import (
+    FactorContribution,
     ForecastBlock,
     GameForecastResponse,
     PremiumDetail,
@@ -233,7 +234,9 @@ def get_game_forecast(
             )
             decile_rel = detail_dict.get("predicted_decile_reliability")
             premium_detail = PremiumDetail(
-                model_coefficients=detail_dict["model_coefficients"],
+                factor_contributions=[
+                    FactorContribution(**fc) for fc in detail_dict["factor_contributions"]
+                ],
                 home_typical_decile=detail_dict["home_typical_decile"],
                 away_typical_decile=detail_dict["away_typical_decile"],
                 predicted_decile=detail_dict["predicted_decile"],
