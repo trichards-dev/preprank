@@ -1,13 +1,24 @@
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Game, PowerRating, Team, School, Sport
-from app.schemas.ratings import PowerRatingOut, RankedTeamOut
+from app.schemas.ratings import LatestWeekOut, PowerRatingOut, RankedTeamOut
 from engine.types import TeamRecord, GameResult, GameStatus as EngineGameStatus
 from engine.power_rating import calculate_all_ratings
 
 router = APIRouter()
+
+
+# Lazy in-memory cache for latest-week lookups.
+# Key: (sport_lower, season_year, source). Value: (payload_dict, expiry_epoch).
+# Rankings change at most weekly; a 5-minute TTL lets new weeks surface
+# shortly after publication while absorbing the obvious re-load bursts.
+_LATEST_WEEK_CACHE: dict[tuple[str, int, str], tuple[dict, float]] = {}
+_LATEST_WEEK_TTL_SEC = 5 * 60
 
 
 @router.get("/rankings", response_model=list[RankedTeamOut])
@@ -53,6 +64,74 @@ def list_rankings(
             school_id=school.id,
         ))
     return ranked_results
+
+
+@router.get("/latest-week", response_model=LatestWeekOut)
+def get_latest_week(
+    sport: str = Query(..., description="Sport name (e.g. Football)"),
+    season_year: int = Query(..., description="Season year"),
+    source: str = Query(
+        "engine",
+        description="Rating source — 'engine' for PrepRank canonical rankings",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return the latest published week for a sport/season + ranked-team count.
+
+    Used by the web rankings page to find the most recent week before
+    issuing a /rankings call. Returns latest_week=null + total_rankings=0
+    when a valid sport has no rankings yet for the requested season.
+    Returns 404 only when the sport name does not resolve to any Sport row.
+    """
+    cache_key = (sport.lower(), season_year, source)
+    entry = _LATEST_WEEK_CACHE.get(cache_key)
+    if entry is not None:
+        payload, expiry = entry
+        if time.time() < expiry:
+            return LatestWeekOut.model_validate(payload)
+        _LATEST_WEEK_CACHE.pop(cache_key, None)
+
+    sport_row = (
+        db.query(Sport)
+        .filter(func.lower(Sport.name) == sport.lower())
+        .first()
+    )
+    if sport_row is None:
+        raise HTTPException(status_code=404, detail="Sport not found")
+
+    latest = (
+        db.query(func.max(PowerRating.week_number))
+        .join(Team, PowerRating.team_id == Team.id)
+        .filter(
+            Team.sport_id == sport_row.id,
+            PowerRating.season_year == season_year,
+            PowerRating.source == source,
+        )
+        .scalar()
+    )
+
+    total = 0
+    if latest is not None:
+        total = (
+            db.query(func.count(PowerRating.id))
+            .join(Team, PowerRating.team_id == Team.id)
+            .filter(
+                Team.sport_id == sport_row.id,
+                PowerRating.season_year == season_year,
+                PowerRating.source == source,
+                PowerRating.week_number == latest,
+            )
+            .scalar()
+        ) or 0
+
+    out = LatestWeekOut(
+        sport=sport_row.name,
+        season_year=season_year,
+        latest_week=int(latest) if latest is not None else None,
+        total_rankings=int(total),
+    )
+    _LATEST_WEEK_CACHE[cache_key] = (out.model_dump(), time.time() + _LATEST_WEEK_TTL_SEC)
+    return out
 
 
 @router.get("/{team_id}", response_model=list[PowerRatingOut])

@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 
 
+class LatestWeekOut(BaseModel):
+    sport: str
+    season_year: int
+    latest_week: int | None
+    total_rankings: int
+
+
 class PowerRatingOut(BaseModel):
     id: int
     team_id: int
