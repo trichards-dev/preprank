@@ -3,8 +3,19 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { fetchContest, fetchContestGames, fetchMyPicks, submitPicks, PickemContest, PickemGame } from "@/lib/api";
+import {
+  fetchContest,
+  fetchContestGames,
+  fetchMyPicks,
+  submitPicks,
+  fetchGameForecast,
+  PickemContest,
+  PickemGame,
+  PickemEntryData,
+  GameForecast,
+} from "@/lib/api";
 import PickemCard from "@/components/PickemCard";
+import PostPickRevealCard from "@/components/PostPickRevealCard";
 import Link from "next/link";
 
 export default function ContestDetailPage() {
@@ -15,7 +26,9 @@ export default function ContestDetailPage() {
   const [contest, setContest] = useState<PickemContest | null>(null);
   const [games, setGames] = useState<PickemGame[]>([]);
   const [myPicks, setMyPicks] = useState<Record<number, number>>({});
+  const [pickEntries, setPickEntries] = useState<Record<number, PickemEntryData>>({});
   const [results, setResults] = useState<Record<number, { is_correct: boolean | null }>>({});
+  const [forecasts, setForecasts] = useState<Record<number, GameForecast | null>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
@@ -30,16 +43,45 @@ export default function ContestDetailPage() {
     if (user) {
       fetchMyPicks(contestId).then((entries) => {
         const picks: Record<number, number> = {};
+        const byGame: Record<number, PickemEntryData> = {};
         const res: Record<number, { is_correct: boolean | null }> = {};
         for (const e of entries) {
           picks[e.game_id] = e.picked_team_id;
+          byGame[e.game_id] = e;
           res[e.game_id] = { is_correct: e.is_correct };
         }
         setMyPicks(picks);
+        setPickEntries(byGame);
         setResults(res);
       }).catch(() => {});
     }
   }, [contestId, user]);
+
+  // Fetch forecasts for the locked-but-not-scored window (post-pick reveal)
+  useEffect(() => {
+    if (!contest || !user || games.length === 0) return;
+    const isOpen = contest.status === "open";
+    const isScored = contest.status === "scored" || contest.status === "closed";
+    if (isOpen || isScored) return;
+    if (Object.keys(myPicks).length === 0) return;
+
+    let cancelled = false;
+    Promise.all(
+      games.map((g) =>
+        fetchGameForecast(g.game_id)
+          .then((f) => [g.game_id, f] as const)
+          .catch(() => [g.game_id, null] as const),
+      ),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const map: Record<number, GameForecast | null> = {};
+      for (const [gid, f] of pairs) map[gid] = f;
+      setForecasts(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [contest, games, myPicks, user]);
 
   const handlePick = (gameId: number, teamId: number) => {
     setMyPicks((prev) => ({ ...prev, [gameId]: teamId }));
@@ -64,6 +106,7 @@ export default function ContestDetailPage() {
   const isOpen = contest.status === "open";
   const isScored = contest.status === "scored" || contest.status === "closed";
   const picksCount = Object.keys(myPicks).length;
+  const showPostPickReveal = !isOpen && !isScored && picksCount > 0;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
@@ -74,10 +117,30 @@ export default function ContestDetailPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 mb-6">
-        {games.map((g) => (
-          <PickemCard key={g.game_id} game={g} pickedTeamId={myPicks[g.game_id] ?? null}
-            onPick={handlePick} locked={!isOpen} result={results[g.game_id]} />
-        ))}
+        {games.map((g) => {
+          if (showPostPickReveal && myPicks[g.game_id] !== undefined) {
+            const entry = pickEntries[g.game_id];
+            return (
+              <PostPickRevealCard
+                key={g.game_id}
+                game={g}
+                pickedTeamId={myPicks[g.game_id]}
+                pickedTeamName={entry?.picked_team_name ?? null}
+                forecast={forecasts[g.game_id] ?? null}
+              />
+            );
+          }
+          return (
+            <PickemCard
+              key={g.game_id}
+              game={g}
+              pickedTeamId={myPicks[g.game_id] ?? null}
+              onPick={handlePick}
+              locked={!isOpen}
+              result={results[g.game_id]}
+            />
+          );
+        })}
       </div>
 
       {isOpen && (
