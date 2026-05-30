@@ -16,6 +16,13 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 // shape change — request/response identical. No api.ts updates
 // required; this comment satisfies the pre-push WEB→API CONTRACT
 // DRIFT gate.
+//
+// NEW ENDPOINT (2026-05-30, Phase 3.4.2.fix): GET /api/v1/ratings/
+// latest-week → LatestWeek = {sport, season_year, latest_week,
+// total_rankings}. Shape mirrors apps/api/app/schemas/ratings.py
+// LatestWeekOut 1:1. Wired via fetchLatestWeek() below. The
+// rankings page refactor (remove FOOTBALL_WEEK_COUNT hardcode +
+// add empty-season UX) lands in the follow-up web commit.
 
 // --- Types ---
 
@@ -174,6 +181,13 @@ export interface PowerRating {
   total_teams_in_division: number | null;
 }
 
+export interface LatestWeek {
+  sport: string;
+  season_year: number;
+  latest_week: number | null;
+  total_rankings: number;
+}
+
 // --- API Functions ---
 
 async function apiFetch<T>(path: string, options?: RequestInit & { token?: string }): Promise<T> {
@@ -196,6 +210,17 @@ async function apiFetch<T>(path: string, options?: RequestInit & { token?: strin
     throw new Error(`API ${res.status}: ${path}`);
   }
   return res.json();
+}
+
+export async function fetchLatestWeek(
+  sport: string,
+  seasonYear: number,
+): Promise<LatestWeek> {
+  const params = new URLSearchParams({
+    sport,
+    season_year: String(seasonYear),
+  });
+  return apiFetch(`/api/v1/ratings/latest-week?${params}`);
 }
 
 export async function fetchRankings(
