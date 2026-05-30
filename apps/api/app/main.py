@@ -47,9 +47,21 @@ async def health_check():
         db_connected = True
     except Exception:
         db_connected = False
+    # Version source priority: Railway auto-injects RAILWAY_GIT_COMMIT_SHA
+    # per-deploy when the service is connected to a GitHub repo (data-plane
+    # accurate). GIT_SHA is a manual control-plane fallback. "unknown" if
+    # neither is set (local dev / disconnected deploy).
+    version = (
+        os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+        or os.environ.get("GIT_SHA")
+        or "unknown"
+    )
+    # Trim long SHAs to short form (7 chars) for readable /health output
+    if version != "unknown" and len(version) > 12:
+        version = version[:7]
     return {
         "status": "healthy" if db_connected else "degraded",
         "service": "preprank-api",
-        "version": os.environ.get("GIT_SHA", "unknown"),
+        "version": version,
         "db_connected": db_connected,
     }
