@@ -152,7 +152,7 @@ def generate_team_card(
     # Bottom bar
     draw.rectangle([0, HEIGHT - 50, WIDTH, HEIGHT], fill=CRIMSON)
     font_small = _get_font(bold=True, size=20)
-    draw.text((40, HEIGHT - 40), "preprank.com", fill=WHITE, font=font_small)
+    draw.text((40, HEIGHT - 40), "prep-rank.com", fill=WHITE, font=font_small)
 
     data = _to_bytes(img)
     _set_cached(key, data)
@@ -206,7 +206,7 @@ def generate_game_card(
 
     # Bottom bar
     draw.rectangle([0, HEIGHT - 50, WIDTH, HEIGHT], fill=CRIMSON)
-    draw.text((40, HEIGHT - 40), "preprank.com", fill=WHITE, font=_get_font(bold=True, size=20))
+    draw.text((40, HEIGHT - 40), "prep-rank.com", fill=WHITE, font=_get_font(bold=True, size=20))
 
     data = _to_bytes(img)
     _set_cached(key, data)
@@ -255,7 +255,7 @@ def generate_pickem_results_card(
 
     # Bottom bar
     draw.rectangle([0, HEIGHT - 50, WIDTH, HEIGHT], fill=CRIMSON)
-    draw.text((40, HEIGHT - 40), "preprank.com", fill=WHITE, font=_get_font(bold=True, size=20))
+    draw.text((40, HEIGHT - 40), "prep-rank.com", fill=WHITE, font=_get_font(bold=True, size=20))
 
     data = _to_bytes(img)
     _set_cached(key, data)
@@ -294,7 +294,7 @@ def generate_school_leaderboard_card(
 
     # Bottom bar
     draw.rectangle([0, HEIGHT - 50, WIDTH, HEIGHT], fill=CRIMSON)
-    draw.text((40, HEIGHT - 40), "preprank.com", fill=WHITE, font=_get_font(bold=True, size=20))
+    draw.text((40, HEIGHT - 40), "prep-rank.com", fill=WHITE, font=_get_font(bold=True, size=20))
 
     data = _to_bytes(img)
     _set_cached(key, data)
@@ -337,7 +337,7 @@ def generate_badge_card(
 
     # Bottom bar
     draw.rectangle([0, HEIGHT - 50, WIDTH, HEIGHT], fill=CRIMSON)
-    draw.text((40, HEIGHT - 40), "preprank.com", fill=WHITE, font=_get_font(bold=True, size=20))
+    draw.text((40, HEIGHT - 40), "prep-rank.com", fill=WHITE, font=_get_font(bold=True, size=20))
 
     data = _to_bytes(img)
     _set_cached(key, data)

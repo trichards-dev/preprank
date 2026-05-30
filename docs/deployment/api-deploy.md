@@ -25,7 +25,7 @@ Add these in Railway → Variables tab:
 |---|---|
 | `DATABASE_URL` | Supabase pooled connection string (port 6543) |
 | `JWT_SECRET_KEY` | Generate: `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
-| `CORS_ORIGINS` | `https://preprank.com,https://www.preprank.com` |
+| `CORS_ORIGINS` | `https://prep-rank.com,https://www.prep-rank.com` |
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_KEY` | Your Supabase anon key |
 | `PORT` | `8000` (Railway sets this automatically) |
@@ -33,8 +33,8 @@ Add these in Railway → Variables tab:
 ### Custom Domain
 
 1. In Railway → Settings → Networking → Custom Domain
-2. Add `api.preprank.com`
-3. Add CNAME record in your DNS: `api.preprank.com` → `<your-app>.up.railway.app`
+2. Add `api.prep-rank.com`
+3. Add CNAME record in your DNS: `api.prep-rank.com` → `<your-app>.up.railway.app`
 
 ### Estimated Cost
 
@@ -61,16 +61,16 @@ fly launch --config fly.toml --dockerfile Dockerfile.api
 ### Environment Variables
 
 ```bash
-fly secrets set DATABASE_URL="postgresql://..." JWT_SECRET_KEY="..." CORS_ORIGINS="https://preprank.com"
+fly secrets set DATABASE_URL="postgresql://..." JWT_SECRET_KEY="..." CORS_ORIGINS="https://prep-rank.com"
 ```
 
 ### Custom Domain
 
 ```bash
-fly certs create api.preprank.com
+fly certs create api.prep-rank.com
 ```
 
-Then add CNAME: `api.preprank.com` → `preprank-api.fly.dev`
+Then add CNAME: `api.prep-rank.com` → `preprank-api.fly.dev`
 
 ---
 
@@ -87,9 +87,9 @@ DATABASE_URL="postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgre
 ## Verify Deployment
 
 ```bash
-curl https://api.preprank.com/health
+curl https://api.prep-rank.com/health
 # Should return: {"status":"healthy","service":"preprank-api"}
 
-curl https://api.preprank.com/api/v1/ratings/rankings?sport=Football&season_year=2025&week_number=11&limit=3
+curl https://api.prep-rank.com/api/v1/ratings/rankings?sport=Football&season_year=2025&week_number=11&limit=3
 # Should return top 3 ranked teams
 ```

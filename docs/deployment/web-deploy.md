@@ -17,27 +17,27 @@ Add in Vercel → Settings → Environment Variables:
 
 | Variable | Value | Environment |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://api.preprank.com` | Production |
-| `NEXT_PUBLIC_API_URL` | `https://api-staging.preprank.com` | Preview |
+| `NEXT_PUBLIC_API_URL` | `https://api.prep-rank.com` | Production |
+| `NEXT_PUBLIC_API_URL` | `https://api-staging.prep-rank.com` | Preview |
 
 ## 3. Custom Domain
 
 1. In Vercel → Settings → Domains
-2. Add `preprank.com`
-3. Add `www.preprank.com` (redirects to preprank.com)
+2. Add `prep-rank.com`
+3. Add `www.prep-rank.com` (redirects to prep-rank.com)
 4. DNS Configuration:
-   - **A Record**: `preprank.com` → `76.76.21.21`
-   - **CNAME**: `www.preprank.com` → `cname.vercel-dns.com`
+   - **A Record**: `prep-rank.com` → `76.76.21.21`
+   - **CNAME**: `www.prep-rank.com` → `cname.vercel-dns.com`
 
 ## 4. Verify
 
 After deployment:
 ```bash
-curl -s https://preprank.com | grep "PREP/RANK"
+curl -s https://prep-rank.com | grep "PREP/RANK"
 # Should contain the PREP/RANK title
 
 # Test OG tags
-curl -s https://preprank.com/teams/1 | grep "og:title"
+curl -s https://prep-rank.com/teams/1 | grep "og:title"
 ```
 
 ## Monorepo Configuration

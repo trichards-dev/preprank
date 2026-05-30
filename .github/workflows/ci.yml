@@ -98,7 +98,7 @@ jobs:
 
       - name: Build web app
         env:
-          NEXT_PUBLIC_API_URL: https://api.preprank.com
+          NEXT_PUBLIC_API_URL: https://api.prep-rank.com
         run: |
           cd apps/web
           npm run build

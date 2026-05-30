@@ -23,7 +23,7 @@ client = TestClient(app)
 
 
 def _unique_email(prefix: str = "admin") -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}@preprank.com"
+    return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
 
 
 def _register(prefix: str) -> tuple[str, int]:

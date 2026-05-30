@@ -9,7 +9,7 @@ client = TestClient(app)
 
 
 def _unique_email(prefix: str = "test") -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}@preprank.com"
+    return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
 
 
 def setup_module():

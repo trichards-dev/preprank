@@ -1,7 +1,11 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.config import settings
+from app.database import engine
 from app.routers import schools, teams, games, ratings, simulations, auth, subscriptions, favorites, pickem, share, hype, scenarios, admin_replay, forecast
 
 app = FastAPI(
@@ -36,4 +40,16 @@ app.include_router(admin_replay.router, prefix="/api/v1/admin/replay", tags=["ad
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "preprank-api"}
+    db_connected = False
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        db_connected = True
+    except Exception:
+        db_connected = False
+    return {
+        "status": "healthy" if db_connected else "degraded",
+        "service": "preprank-api",
+        "version": os.environ.get("GIT_SHA", "unknown"),
+        "db_connected": db_connected,
+    }

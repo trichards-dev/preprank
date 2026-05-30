@@ -7,7 +7,7 @@ client = TestClient(app)
 
 
 def _register_and_get_token(prefix: str = "sub") -> str:
-    email = f"{prefix}_{uuid.uuid4().hex[:8]}@preprank.com"
+    email = f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
     resp = client.post("/api/v1/auth/register", json={
         "email": email, "password": "testpass123",
         "first_name": "Test", "last_name": "User",
