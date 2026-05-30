@@ -97,8 +97,8 @@ export default function RankingsTable({ rankings, playoffSpots = 8 }: RankingsTa
                     {r.school_name}
                   </Link>
                 </td>
-                <td className="px-3 py-3 text-steel-gray">{r.division}</td>
-                <td className="px-3 py-3 text-steel-gray">{r.classification}</td>
+                <td className="px-3 py-3 text-steel-gray">{r.division ?? "—"}</td>
+                <td className="px-3 py-3 text-steel-gray">{r.classification ?? "—"}</td>
                 <td className="px-3 py-3 text-right font-mono">{r.power_rating.toFixed(2)}</td>
                 <td className="px-3 py-3 text-right font-mono text-steel-gray">
                   {r.strength_factor?.toFixed(2) ?? "—"}

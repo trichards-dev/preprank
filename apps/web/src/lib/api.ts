@@ -31,9 +31,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 export interface RankedTeam {
   rank: number;
   school_name: string;
-  division: string;
-  classification: string;
-  select_status: string;
+  // division / classification / select_status are nullable in
+  // production data — non-Football sports have ~70% NULL coverage
+  // pending the v1.1 division backfill (queue item #24).
+  division: string | null;
+  classification: string | null;
+  select_status: string | null;
   power_rating: number;
   strength_factor: number | null;
   team_id: number;

@@ -1,9 +1,47 @@
 from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import ratings as ratings_router
-from app.schemas.ratings import LatestWeekOut
+from app.schemas.ratings import LatestWeekOut, RankedTeamOut
 
 client = TestClient(app)
+
+
+# --- Schema contract guards ---
+
+
+def test_ranked_team_nullable_contract():
+    """Lock the required-vs-nullable contract at CI time.
+
+    Pre-existing latent bug surfaced in Phase 3.4.2.fix halt-gate
+    verification: 7 of 8 sports returned 500 because RankedTeamOut
+    declared division/classification/select_status as required strings
+    but production data has ~70% NULL across non-Football sports.
+    Removing the constraint fixed it; this test prevents anyone from
+    quietly re-tightening it without backfilling the data first.
+    """
+    required_fields = {
+        "rank",
+        "school_name",
+        "power_rating",
+        "team_id",
+        "school_id",
+    }
+    nullable_fields = {
+        "division",
+        "classification",
+        "select_status",
+        "strength_factor",
+    }
+
+    for field in required_fields:
+        assert RankedTeamOut.model_fields[field].is_required(), (
+            f"{field} should remain required — production data always populates this"
+        )
+
+    for field in nullable_fields:
+        assert not RankedTeamOut.model_fields[field].is_required(), (
+            f"{field} must be nullable — production has NULLs that would cause 500s"
+        )
 
 
 def test_list_rankings_returns_200():

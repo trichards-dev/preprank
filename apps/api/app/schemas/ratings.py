@@ -24,9 +24,9 @@ class PowerRatingOut(BaseModel):
 class RankedTeamOut(BaseModel):
     rank: int
     school_name: str
-    division: str
-    classification: str
-    select_status: str
+    division: str | None = None
+    classification: str | None = None
+    select_status: str | None = None
     power_rating: float
     strength_factor: float | None = None
     team_id: int
