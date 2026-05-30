@@ -1,20 +1,13 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
-// NOTE (2026-05-29): `GET /api/v1/games/{game_id}/forecast` was added to
-// the API in commit 40dfc16 (Phase 2 of the confidence-disclosure UX
-// workstream). Endpoint shape: per-game home_win_probability + CI bounds +
-// confidence tier label + auth-conditional premium_detail block. This file
-// will gain a `fetchGameForecast()` helper + corresponding TypeScript types
-// when the Phase 3 web layer kicks off after the week-1 engine checkpoint
-// (see claude-memory/apps/preprank/forecast_api_design_2026-05-29.md +
-// confidence_disclosure_ux_options_2026-05-29.md Spec 6).
-//
-// AMENDMENT (2026-05-29 evening, commit 8d321e9): the forecast endpoint's
-// CI methodology changed from post-iso bin gap to binomial sampling CI
-// (Option D, approved by Reese; see decisions.md 2026-05-29 evening).
-// The API response shape is UNCHANGED — same fields, same types — only
-// the underlying CI computation differs. No web client work required for
-// this amendment; this comment confirms contract review.
+// NOTE (2026-05-30): Phase 3 web layer kicked off after engine
+// checkpoint clearance. `fetchGameForecast()` helper + types live in
+// this file (types: GameForecast / ForecastBlock / SourceDataCaveat /
+// PremiumDetail / PredictedDecileReliability + ConfidenceTier and
+// ForecastUnavailableReason string-literal unions). Shape matches the
+// Pydantic models at apps/api/app/schemas/forecast.py 1:1; see
+// claude-memory/apps/preprank/forecast_api_design_2026-05-29.md for
+// the contract spec.
 
 // --- Types ---
 
@@ -70,6 +63,62 @@ export interface Game {
   is_out_of_state: boolean;
   home_team_name: string | null;
   away_team_name: string | null;
+}
+
+// --- Forecast types (mirrors apps/api/app/schemas/forecast.py) ---
+
+export type ConfidenceTier = "confident_pick" | "lean" | "toss_up" | "long_shot";
+
+export type ForecastUnavailableReason =
+  | "INSUFFICIENT_PRIOR_DATA"
+  | "RECENTLY_SCHEDULED"
+  | "SPORT_CALIBRATION_PENDING"
+  | "COLD_START_TEAM"
+  | "OTHER";
+
+export interface ForecastBlock {
+  home_win_probability: number;
+  home_win_probability_ci_low: number;
+  home_win_probability_ci_high: number;
+  confidence_tier: ConfidenceTier;
+  confidence_tier_label: string;
+}
+
+export interface SourceDataCaveat {
+  code: string;
+  prose: string;
+}
+
+export interface PredictedDecileReliability {
+  n_games: number;
+  gap: number;
+  mean_predicted: number | null;
+  mean_observed: number | null;
+}
+
+export interface PremiumDetail {
+  model_coefficients: Record<string, number>;
+  home_typical_decile: number | null;
+  away_typical_decile: number | null;
+  predicted_decile: number;
+  predicted_decile_reliability: PredictedDecileReliability | null;
+  methodology_deep_link: string;
+}
+
+export interface GameForecast {
+  game_id: number;
+  sport: string;
+  season_year: number;
+  week_number: number | null;
+  status: string;
+  home_team: { id: number; name: string };
+  away_team: { id: number; name: string };
+  forecast: ForecastBlock | null;
+  forecast_unavailable_reason: ForecastUnavailableReason | null;
+  source_data_caveat: SourceDataCaveat | null;
+  premium_detail: PremiumDetail | null;
+  calibration_run_id: string;
+  computed_at: string;
 }
 
 export interface TeamProjection {
@@ -193,6 +242,10 @@ export async function fetchGames(params: {
 
 export async function fetchGame(gameId: number): Promise<Game> {
   return apiFetch(`/api/v1/games/${gameId}`);
+}
+
+export async function fetchGameForecast(gameId: number): Promise<GameForecast> {
+  return apiFetch(`/api/v1/games/${gameId}/forecast`);
 }
 
 export async function fetchTeamRatings(
