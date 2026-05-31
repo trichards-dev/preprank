@@ -322,7 +322,7 @@ function DashboardMock({ premium }: { premium: boolean }) {
           <div className="rounded-lg border border-steel-gray/30 bg-charcoal-elevated p-6 text-center">
             <div className="font-display text-base font-bold uppercase tracking-wide mb-2">Premium feature</div>
             <p className="text-sm text-steel-gray mb-4">
-              Upgrade to see model coefficients, reliability stats, and methodology depth for your favorited teams.
+              Upgrade to see what&apos;s driving each prediction, comparable historical matchups, and detailed tracking for your favorited teams.
             </p>
             <span className="inline-block rounded bg-crimson px-6 py-2 font-semibold text-white">
               Upgrade to Premium

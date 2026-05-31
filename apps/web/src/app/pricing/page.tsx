@@ -17,7 +17,7 @@ const TIERS = [
     name: "Premium Monthly",
     price: "$4.99",
     period: "/month",
-    features: ["Everything in Free", "Monte Carlo Projections", "What's At Stake Analysis", "Playoff Probability", "Championship Odds", "My Teams Dashboard"],
+    features: ["Everything in Free", "Monte Carlo Projections", "What's At Stake Analysis", "Per-Game Model Details (factor impact)", "Playoff Probability", "Championship Odds", "My Teams Dashboard"],
     locked: [],
     cta: "Start Monthly",
     tier: "premium_monthly",
