@@ -259,6 +259,66 @@ def check_simulation_in_routers(diff: str, files: list[str], r: CheckResult):
         )
 
 
+def check_web_reliability_table_leak(r: CheckResult):
+    """
+    IP-PROTECTION GUARD — apps/web/src/data/reliability_table.json must NOT
+    contain model_coefficients (or any per-decile calibration numerics).
+
+    Background: methodology/page.tsx imports this JSON. Today it's a server
+    component, so webpack doesn't ship the JSON to clients — but ONE wrong
+    PR (e.g., adding `"use client"` or importing it from a client component)
+    would inline the entire JSON into the client bundle, exposing every
+    sport's β coefficients to every visitor's browser. The 3.4.2 polish-sweep
+    halt-gate caught this fragile assumption; this guard removes the regression
+    path by enforcing the file content directly, not the import topology.
+
+    The API-side copy at apps/api/app/data/reliability_table.json keeps the
+    full data — needed by the forecast endpoint server-side. Only the web
+    copy is constrained.
+
+    See: claude-memory decisions.md 2026-05-31 entry on the 3.4.2
+    polish-sweep halt-gate finding (9-for-9 scoreboard).
+    """
+    path = Path("apps/web/src/data/reliability_table.json")
+    if not path.exists():
+        r.passed.append("Web reliability table absent — skip leak check")
+        return
+
+    text = path.read_text()
+    forbidden_patterns = [
+        ("model_coefficients", "raw model coefficients (β values)"),
+        ("beta_0", "β₀ intercept value"),
+        ("beta_1", "β₁ coefficient"),
+        ("beta_2", "β₂ coefficient"),
+        ("beta_3", "β₃ coefficient"),
+        ("beta_4", "β₄ coefficient"),
+        ("beta_5", "β₅ coefficient"),
+        ("beta_6", "β₆ coefficient"),
+        ("mean_predicted", "per-decile mean predicted (reveals calibration)"),
+        ("mean_observed", "per-decile mean observed (reveals calibration)"),
+    ]
+    hits = [
+        (key, label) for key, label in forbidden_patterns if key in text
+    ]
+    if hits:
+        r.blocks.append(
+            "WEB RELIABILITY TABLE IP LEAK — "
+            "apps/web/src/data/reliability_table.json contains fields that "
+            "must never ship to clients:\n"
+            + "\n".join(f"  • {key!r} — {label}" for key, label in hits)
+            + "\n  Strip to consumed-field subset only "
+            "(isotonic_slope, isotonic_slope_in_band, "
+            "tail_miscalibration_after_isotonic, deciles[].n_games, "
+            "generated_utc). API-side copy keeps full data.\n"
+            "  See claude-memory decisions.md 2026-05-31 entry on the 3.4.2 "
+            "polish-sweep halt-gate finding."
+        )
+    else:
+        r.passed.append(
+            "Web reliability table is stripped of coefficient/calibration leak fields"
+        )
+
+
 def check_vercel_deploy_risk(files: list[str], r: CheckResult):
     """Flag when a push to master will trigger a Vercel auto-deploy."""
     branch = run("git branch --show-current").strip()
@@ -295,6 +355,7 @@ def main():
     check_bcrypt_pin(diff, files, r)
     check_destructive_migrations(diff, files, r)
     check_simulation_in_routers(diff, files, r)
+    check_web_reliability_table_leak(r)
     check_vercel_deploy_risk(files, r)
 
     # ── Print report ──────────────────────────────────────────────────────
